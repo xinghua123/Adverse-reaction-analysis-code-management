@@ -1,0 +1,2164 @@
+
+```{r}
+library(scales)
+#输出函数
+output2 <- function(table1){
+  for(i in 1:ncol(table1)){
+    table1[, i] <- as.character(table1[, i])
+  }
+  myft <- flextable::regulartable(table1, 
+       col_keys = names(table1))
+  myft <- set_header_labels(myft )
+  myft <- merge_h(myft, part = "header")
+  myft <- merge_v(myft, part = "header")
+  myft <- theme_vanilla(myft)
+  myft <- bg(myft, i = 1, bg = "#ADADAD", part = "header")
+  myft <- flextable::align(myft, align = "center", part = "all" )
+  myft <- border_remove(myft)
+  myft <- hline_top(myft, part = "header", border = fp_border(width = 1))
+  myft <- hline_bottom(myft, part = "header", border = fp_border(width = 1))
+  myft <- hline(myft, i = 1, part = "header", border = fp_border(width = 1))
+  myft <- hline_bottom(myft, part = "body", border = fp_border(width = 1))
+  myft <- autofit(myft)
+  myft <- height(myft, i = 1,  height = 0.1)
+  myft <- height(myft, i = 2:nrow(table1),  height = 0.1)
+  myft <- width(myft, j = 1,  width = 1.2)
+  myft <- width(myft, j = 2:ncol(table1),  width = 1.5)
+  myft
+}
+
+output1 <- function(table1){
+  for(i in 1:ncol(table1)){
+    table1[, i] <- as.character(table1[, i])
+  }
+  myft <- flextable::regulartable(table1, 
+       col_keys = names(table1))
+  myft <- set_header_labels(myft )
+  myft <- merge_h(myft, part = "header")
+  myft <- merge_v(myft, part = "header")
+  myft <- theme_vanilla(myft)
+  myft <- bg(myft, i = 1, bg = "#ADADAD", part = "header")
+  myft <- flextable::align(myft, align = "center", part = "all" )
+  myft <- border_remove(myft)
+  myft <- hline_top(myft, part = "header", border = fp_border(width = 1))
+  myft <- hline_bottom(myft, part = "header", border = fp_border(width = 1))
+  myft <- hline(myft, i = 1, part = "header", border = fp_border(width = 1))
+  myft <- hline_bottom(myft, part = "body", border = fp_border(width = 1))
+  myft <- autofit(myft)
+  myft <- width(myft, j = 1,  width = 1.2)
+  myft <- width(myft, j = 2:ncol(table1),  width = 1.2)
+  
+  myft
+}
+```
+
+```{r}
+#频数及百分比
+Frequency_P <- function(variable){
+  describe <- as.data.frame(table(variable))
+  describe$`百分比` <- round(describe$Freq/sum(describe$Freq)*100, 2)
+  names(describe)[1:2] <- c("变量名", "频数")
+  output1(describe)
+}
+```
+
+```{r}
+#连续性变量描述
+#variable = 给出对应的数据集或向量
+continuous <- function(variable){
+  tabl <- as.data.frame(describeBy(variable))
+  tabl <- tabl[, -c(6,7,10:13)]
+  if(class(variable) == "data.frame"){
+    tabl$vars <- nrow(variable)-tabl$n
+  }else{
+    tabl$vars <- length(variable)-tabl$n
+  }
+  tabl$`变量名` <- rownames(tabl)
+  tabl <- tabl[, c(ncol(tabl),1:(ncol(tabl)-1))]
+  tabl[, 2:ncol(tabl)] <- round(tabl[, 2:ncol(tabl)], 2)
+  colnames(tabl)[2:8] <- c("缺失数", "例数", "均值", "标准差", "中位数", "最小值", "最大值")
+  output1(tabl)
+}
+```
+
+```{r}
+#变量描述（连续变量包括正态性检验）
+library(arsenal)
+Describe <- function(variable){
+  my_controls <- tableby.control(
+        test = TRUE, total = TRUE,
+        numeric.test = "anova", cat.test = "chisq",
+        numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+        cat.stats = c("countpct", "Nmiss2"),
+        stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                             range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2)
+  tabl <- tableby(~., data = as.data.frame(variable)) #防止只有一列数据
+  tabl <- summary(tabl, text = TRUE)
+  table1 <- as.data.frame(tabl$object)
+  data_type <- table1[table1[, 8] == "", 7]
+  for (i in 1:ncol(variable)) {
+    tabl1 <- tableby(~.,control = my_controls, data = as.data.frame(variable[, i]))
+    tabl1 <- summary(tabl1, text = TRUE)
+    table2 <- as.data.frame(tabl1$object)
+    tabl1 <- as.data.frame(tabl1)
+    tabl1[, 1] <- table2[, 6]
+    tabl1[1, 1] <- names(variable)[i]
+    if(data_type[i] == "numeric"){
+      if(sum(!is.na(variable[, i])) >= 3 & ((sum(is.na(variable[, i])) == 0 & length(unique(variable[, i])) >= 2) | (sum(is.na(variable[, i])) != 0 & length(unique(variable[, i])) >= 3))){
+       test_P <- round(shapiro.test(variable[, i])$p.value, 3)
+       if(test_P < 0.001){
+         test_P <- "< 0.001"
+       }else if(test_P > 0.999){
+         test_P <- "> 0.999"
+       }
+      }else{
+        test_P <- ""
+      }
+      tabl1[6, 1] <- "正态性检验P值"
+      tabl1[6, 2] <- test_P
+    }
+    if(i==1)
+      tabl2 <- tabl1
+    else
+      tabl2 <- rbind(tabl2, tabl1)
+  }
+  colnames(tabl2)[1] <- "变量"
+  output1(tabl2)
+}
+```
+
+```{r}
+#各个访视点与基线差值的描述(包含基线数据(基线数据放在第一列))
+Describe_diff <- function(aa2, h){
+  for (i in 1:(ncol(aa2)/h)) {
+    ee1 <- aa2[, c((h*i-(h-1)):(h*i))]
+    aa1 <- as.data.frame(ee1[, c(2:ncol(ee1))])
+    for (j in 2:ncol(ee1)) { #第一列为基线，计算每个变量各个访视点与基线的差值
+      aa1[, j-1] <- ee1[, j] - ee1[, 1]
+      names(aa1)[j-1] <- names(ee1)[j]
+    }
+    names(aa1)[1:ncol(aa1)] <- paste(names(aa1)[1:ncol(aa1)], "与基线的差值", sep = "")
+    if(i==1){
+      aa <- aa1
+    }else{
+      aa <- cbind(aa, aa1)
+    }
+  }
+  Describe(aa)
+}
+```
+
+```{r}
+#各访视点与基线差值的组间比较(group必须放在第一列包含基线数据(基线数据放在第二列))，每个变量的访视点个数必须是相同的。
+Group_diff <- function(aa2, h){
+  for (i in 1:((ncol(aa2)-1)/h)) {
+    ee1 <- aa2[, c(1,(h*i-(h-2)):(h*i+1))]
+    aa1 <- ee1[, c(1, 3:ncol(ee1))]
+    for (j in 3:ncol(ee1)) { #第二列为基线，计算每个变量各个访视点与基线的差值
+      aa1[, j-1] <- ee1[, j] - ee1[, 2]
+    }
+    names(aa1)[2:ncol(aa1)] <- paste(names(aa1)[2:ncol(aa1)], "与基线的差值", sep = "")
+    if(i==1){
+      aa <- aa1
+    }else{
+      aa <- cbind(aa, aa1[, -1])
+      names(aa)[c((ncol(aa)-ncol(aa1)+2):ncol(aa))] <- names(aa1)[2:ncol(aa1)] #防止aa1只有两列
+    }
+  }
+  Group(aa)
+}
+```
+
+```{r}
+####对监测不良反应数据进行分组描述,dataset是分析数据集，组别必须放到第一列，针对分类变量目前只能纳入一个变量，连续变量可以纳入多个,输出的表格按每行中的发生比例排序
+monitor <- function(dataset, test= F){
+  names(dataset)[1] <- "group"
+  if(test==FALSE){
+    my_controls <- tableby.control(test = FALSE, total = TRUE , digits.pct  = 2)
+  }else{
+    my_controls <- tableby.control(test = TRUE, total = TRUE , digits.pct = 2)
+  }
+  test_1 <- tableby(group ~., data = dataset, control = my_controls)
+  table_one <- as.data.frame(summary(test_1, text = TRUE, na.rm=F))
+  names(table_one)[1] <- "变量"
+  table_one$`变量` <- gsub("-  ", "", table_one$`变量`)
+  
+  type <- class(dataset[, 2])
+  if(type == "factor" | type == "character"){
+      table_one[2:nrow(table_one), 2] <- gsub("\\(.*\\)", "",table_one[2:nrow(table_one), 2])
+      table_one[2:nrow(table_one), 3] <- gsub("\\(.*\\)", "",table_one[2:nrow(table_one), 3])
+      table_one[, 2:3] <- lapply(table_one[, 2:3], as.numeric)
+      table_one[2:nrow(table_one),] <- table_one[2:nrow(table_one),][order((table_one[2:nrow(table_one),2][1:nrow(table_one)])/rowSums(table_one[2:nrow(table_one),2:3]), decreasing = TRUE),]
+      
+      BFB_1 <- paste(table_one[2:(nrow(table_one)),2], "(",percent(table_one[2:(nrow(table_one)),2]/rowSums(table_one[2:(nrow(table_one)),2:3]),0.01),")",sep = "")
+      BFB_0 <- paste(table_one[2:(nrow(table_one)),3], "(",percent(table_one[2:(nrow(table_one)),3]/rowSums(table_one[2:(nrow(table_one)),2:3]),0.01),")",sep = " ")
+      
+      table_one[2:(nrow(table_one)),2] <- BFB_1
+      table_one[2:(nrow(table_one)),3] <- BFB_0
+    }else{
+      table_one
+    }
+  output1(table_one)
+}  
+```
+
+```{r}
+#变量的组间比较
+##dataset是分析数据集，组别必须放到第一列；output控制是否以三线表输出，默认为TRUE，输出三线表，output=FLASE表示输出格式为data.frame；参数Test是控制是否输出检验结果，默认为TRUE，输出检验结果，否则不输出检验结果。存在的问题：存在的检验是否需要校正correct = TRUE？
+Group <- function(dataset, output = TRUE, test = TRUE){
+  names(dataset)[1] <- "group"
+  if(length(unique(na.omit(dataset$group))) == 1 & test == TRUE){
+    table_three <- "单组分析，无法进行检验，请调整参数：test==FALSE"
+  }
+  if(length(unique(na.omit(dataset$group))) == 0){
+    table_three <- "无数据，无法进行分析"
+  }
+  if(length(unique(na.omit(dataset$group))) > 1 & test == TRUE){
+    for (k in 1:ncol(dataset)) {
+    #由于tableby对于全部缺失且类型为数值型（num）变量无法使用，转为logi型可以统计。
+    if(sum(!is.na(dataset[, k])) == 0)
+      dataset[, k] <- as.logical(dataset[, k])
+  }
+  table_one <- tableby(group ~., data = dataset)
+  table_one <- summary(table_one, text = TRUE, na.rm=TRUE)
+  table1 <- as.data.frame(table_one$object)
+  data_type <- table1[table1[, 8] == "", 7]
+  group_type <- unique(dataset$group)
+  add_list1 <- vector(mode = "numeric", length = length(group_type))
+  add_list2 <- vector(mode = "numeric", length = length(group_type))
+  add_list3 <- vector(mode = "numeric", length = length(group_type))
+  for (i in 1:length(data_type)) {
+    if(data_type[i] == "numeric"){
+      for (l in 1:length(group_type)) {
+        group_level <- subset(dataset, dataset$group == group_type[l])
+        add_list2[l] <- sum(!is.na(unique(group_level[, i+1])))#组内变量取值的水平个数
+        add_list3[l] <- sum(!is.na(group_level[, i+1]))#组内变量样本数
+       if(add_list2[l] >= 2 & add_list3[l] >= 3 & add_list3[l] <= 5000){   
+         #shapiro.test函数要求3<=样本量<=5000,且所有的数据不能完全相同
+          add_list1[l] <- shapiro.test(group_level[, i+1])$p.value
+        }else
+          add_list1[l] <- 0
+      }
+      
+        if(all(add_list1 > 0.05)){
+          num_way <-  "anova"
+        }else
+          num_way <-  "kwt"
+      }else{
+        num_way <-  "anova"
+    }
+              
+    if(data_type[i] == "categorical"){
+        cate_result <- tableby(group ~., data = dataset[, c(1,i+1)])
+        cate_result <- summary(cate_result, text = TRUE, na.rm=TRUE)
+        cate_result <- as.data.frame(cate_result)
+        if(sum(is.na(dataset[, c(i+1)])) == 0)
+          cate_result <- cate_result[-1, -c(1,ncol(cate_result))] 
+        else
+          cate_result <- cate_result[-c(1,2), -c(1,ncol(cate_result))] 
+        #如果分类变量存在缺失第一行和第二行都去掉（名称和缺失）
+        for (j in 1:ncol(cate_result)) {
+          cate_result[, j] <- gsub("\\(.*\\)","",cate_result[, j])
+          cate_result[, j] <- as.numeric(cate_result[, j])
+        }
+        cate_result[nrow(cate_result)+1,] <- colSums(cate_result[, 1:ncol(cate_result)])
+        cate_result <- cate_result[, c(ncol(cate_result),1:(ncol(cate_result)-1))]
+        
+        if(nrow(cate_result) > 2){
+        ##exp_fre是计算期望频数
+          exp_fre <- matrix(nrow = nrow(cate_result)-1, ncol = ncol(cate_result)-1)
+          for (k in 1:(nrow(cate_result)-1)) {
+              for (j in 1:(ncol(cate_result)-1)) {
+                exp_fre[k ,j] <- (cate_result[k, 1]*cate_result[nrow(cate_result), j+1])/cate_result[nrow(cate_result), 1]
+              }
+          }
+
+          if((nrow(exp_fre) == 2 & ncol(exp_fre) == 2) & ((cate_result[nrow(cate_result),1] < 40 | any(exp_fre < 1) == TRUE) | (cate_result[nrow(cate_result),1] >= 40 & any(exp_fre < 5 & exp_fre >= 1) == TRUE))){  
+            #完全随机设计四格表资料。1.当样本总例数n<40或至少存在一个期望频数T<1时，只能使用Fisher确切概率法；2.当样本总例数n≥40且至少存在一个期望频数1≤T<5时，使用校正卡方检验或Fisher确切概率法（这里我们只选择使用Fisher确切概率法）。
+            cate_way <- "fe"
+          }else if((nrow(exp_fre) > 2 | ncol(exp_fre) > 2) & (nrow(exp_fre) != 2 & ncol(exp_fre) != 2) & (any(exp_fre < 1) == TRUE | length(which(exp_fre < 5 & exp_fre >= 1)) > ((nrow(cate_result)-1)*(ncol(cate_result)-1))/5)){
+            #完全随机设计R×C资料。当至少存在一个期望频数T<1或期望频数1≤T<5的格子数超过总格子数的1/5时，使用Fisher确切概率法。
+            cate_way <- "fe"
+          }else{
+            cate_way <- "chisq"
+          }
+        }else{
+          cate_way <- "chisq"
+        }
+    }else{
+       cate_way <- "chisq"
+    }
+        
+        my_controls <- tableby.control(
+        test = TRUE, total = TRUE,
+        numeric.test = num_way, cat.test = cate_way,
+        numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+        cat.stats = c("countpct", "Nmiss2"),
+        stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                             range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2)
+        table_two <- tableby(group ~.,control = my_controls, data = dataset[, c(1,i+1)])
+        table_two <- summary(table_two, text = TRUE, na.rm=F)
+        table2 <- as.data.frame(table_two$object)#####对象是？
+        table_two <- as.data.frame(table_two)
+        names(table_two)[1] <- "变量"
+        table_two$`变量` <- gsub("-  ", "", table_two$`变量`)
+        
+        table_two[2:nrow(table_two), 2] <- gsub("\\(.*\\)", "",table_two[2:nrow(table_two), 2])
+        table_two[2:nrow(table_two), 3] <- gsub("\\(.*\\)", "",table_two[2:nrow(table_two), 3])
+        table_two[, 2:3] <- lapply(table_two[, 2:3], as.numeric)
+        
+        # table_two[2:nrow(table_two),] <- table_two[2:nrow(table_two),][order((table_two[2:nrow(table_two),2][1:nrow(table_two)])/rowSums(table_two[2:nrow(table_two),2:3]), decreasing = TRUE),]
+        
+        BFB_1 <- paste(table_two[2:(nrow(table_two)-1),2], "(",percent(table_two[2:(nrow(table_two)-1),2]/rowSums(table_two[2:(nrow(table_two)-1),2:3]),0.01),")",sep = "")
+        BFB_0 <- paste(table_two[2:(nrow(table_two)-1),3], "(",percent(table_two[2:(nrow(table_two)-1),3]/rowSums(table_two[2:(nrow(table_two)-1),2:3]),0.01),")",sep = " ")
+        table_two[2:(nrow(table_two)-1),2] <- BFB_1
+        table_two[2:(nrow(table_two)-1),3] <- BFB_0
+        
+        table_two[, c(1,ncol(table_two)+1)] <- table2[, c("group.label","group.test")]
+        table_two[table_two$`p value` == "", ncol(table_two)] <- ""
+        table_two$`统计量` <- ""
+        table_two$`95%CI` <- ""
+        table_two <- table_two[, c(1:(ncol(table_two)-4),ncol(table_two)-2,ncol(table_two),ncol(table_two)-1,ncol(table_two)-3)]
+        
+        if(data_type[i] == "categorical"){
+          cate_data <- cate_result[-nrow(cate_result), -1]
+          if(nrow(cate_result) > 2){  #求统计量和P值。（存在一个问题：2×2资料tableby卡方检验求出的P值与chisq.test求出的P值不同）
+            if(cate_way == "chisq"){
+              table_two$`统计量`[1] <- paste("X-squared =", round(chisq.test(cate_data, correct = F)$statistic, 2))
+              table_two$`p value`[1] <- sprintf("%.3f", chisq.test(cate_data, correct = F)$p.value)                 
+                                        #sprintf输出字符型的有效数字,round最后0无法显示
+            }else if(cate_way == "fe"){
+            #table_two$`统计量`[1] <- round(fisher.test(cate_data)$statistic, 2)
+            }
+          }else{
+            table_two$`p value`[1] <- "-"
+            table_two$`统计量`[1] <- "-"
+            table_two$group.test[1] <- "-"
+          }
+        }
+        
+        if(data_type[i] == "numeric"){ #求出统计量
+          add_list1 <- round(add_list1, 3)
+          for (m in 1:length(group_type)) {
+            if(add_list1[m] < 0.001)
+              add_list1[m] <- "< 0.001"
+          }
+          table_two[nrow(table_two)+1, 1] <- "正态性检验P值"
+          table_name <- colnames(table_two)[2:(length(add_list1)+1)]
+          table_name <- gsub(" \\(.*\\)","",table_name)
+          for (l in 1:length(add_list1)) {
+            for (n in 1:length(add_list1)) {
+              if(table_name[l] == group_type[n])
+                table_two[nrow(table_two), l+1] <- add_list1[n]
+            }
+          }
+          add_list1 <- vector(mode = "numeric", length = length(group_type))
+          #上面把add_list1变为了字符型，需要重新定义add_list1，不然round函数第二次无法使用
+          
+          add_list4 <- vector(mode = "numeric", length = length(group_type))
+          #计算每个组不为缺失（NA）的个数（至少每个组有一个数据才能进行以下的检验）
+          for (j in 1:length(group_type)) {
+            add_list4[j] <- sum(!is.na(dataset[dataset$group == group_type[j], i+1]))
+          }
+          if(all(add_list4) > 0){
+            dataset[, c(1,i+1)]$group <- as.factor(dataset[, c(1,i+1)]$group)
+            names(dataset)[c(1,i+1)] <- gsub("-", "_", names(dataset)[c(1,i+1)]) #as.formula函数对一些字符无法识别，需要替换
+            names(dataset)[c(1,i+1)] <- gsub("/", "_", names(dataset)[c(1,i+1)])
+            names(dataset)[c(1,i+1)] <- gsub(" ", "", names(dataset)[c(1,i+1)])
+            names(dataset)[c(1,i+1)] <- gsub("\\(", "", names(dataset)[c(1,i+1)])
+            names(dataset)[c(1,i+1)] <- gsub("\\)", "", names(dataset)[c(1,i+1)])
+            names(dataset)[c(1,i+1)] <- gsub("（", "", names(dataset)[c(1,i+1)])
+            names(dataset)[c(1,i+1)] <- gsub("）", "", names(dataset)[c(1,i+1)])
+            gongshi <- as.formula(paste(names(dataset)[i+1], "~", names(dataset)[1]))
+            if(num_way== "anova"){ #两组的组间比较，使用t.test检验求出统计量和置信区间
+            summary_aov <- summary(aov(gongshi, data = dataset[, c(1,i+1)]))[[1]]$`F value`[1]
+            if(length(group_type) == 2){
+              table_two$`统计量`[1] <- paste("T =", round(t.test(gongshi, data = dataset[, c(1,i+1)], var.equal = TRUE)$statistic, 2))
+              conf_int <- t.test(gongshi, data = dataset[, c(1,i+1)], var.equal = TRUE)$conf.int
+              table_two$`95%CI`[1] <- paste("(", round(conf_int[1], 3), ",", round(conf_int[2], 3), ")")
+              table_two$`p value`[1] <- sprintf("%.3f", t.test(gongshi, data = dataset[, c(1,i+1)], var.equal = TRUE)$p.value)
+            }else{
+              table_two$`统计量`[1] <- paste("F =", round(summary_aov, 2))
+              #table_two$`p value`[1] <- sprintf("%.3f", summary_aov$p.value)
+            }
+          }else if(num_way== "kwt" ){ #两组的组间比较，使用wilcox.test检验求出统计量和置信区间
+            if(length(group_type) == 2){
+              table_two$`统计量`[1] <- paste("W =", round(wilcox.test(gongshi, data = dataset[, c(1,i+1)])$statistic, 2))
+              if(length(unique(dataset[!is.na(dataset[, i+1]), i+1])) != 1){ #所有值相等，无法计算置信区间
+                conf_int <- wilcox.test(gongshi, data = dataset[, c(1,i+1)], conf.int = TRUE)$conf.int
+                table_two$`95%CI`[1] <- paste("(", round(conf_int[1], 3), ",", round(conf_int[2], 3), ")")
+              } #是否需要加else
+              
+              table_two$`p value`[1] <- sprintf("%.3f", wilcox.test(gongshi, data = dataset[, c(1,i+1)])$p.value)
+            }else{
+              table_two$`统计量`[1] <- paste("X-squared =", round(kruskal.test(gongshi, data = dataset[, c(1,i+1)])$statistic, 2))
+            }
+            #计算非参检验（秩和检验）的平均秩
+            rank_calculate <- dataset[, c(1,i+1)]
+            rank_calculate$`秩次`[!is.na(rank_calculate[, 2])] <- rank(rank_calculate[!is.na(rank_calculate[, 2]), 2])
+            table_two[nrow(table_two)+1, 1] <- "平均秩"
+            for (k in 2:(length(group_type)+1)) {
+               table_two[nrow(table_two), k] <- round(mean(rank_calculate[rank_calculate$group == gsub(" \\(.*\\)","",names(table_two)[k]), 3], na.rm = TRUE), 3)
+            }
+            table_two[nrow(table_two), ncol(table_two)-4] <- round(mean(rank_calculate[, 3], na.rm = TRUE), 3)
+            table_two <- table_two[c(1:(nrow(table_two)-2),nrow(table_two),nrow(table_two)-1),]
+          }
+          if(table_two$group.test[1] == ""){
+            table_two$`统计量`[1] <-  ""
+          }
+          }
+        }
+        
+        names(table_two)[1] <- "变量"
+        if(i==1){
+          table_three <- table_two
+        }else{
+          table_three <- rbind(table_three,table_two)
+        }
+  }
+  names(table_three) <- gsub("Total", "总计", names(table_three))
+  names(table_three)[names(table_three) == "group.test"] <- "检验方法"
+  names(table_three)[names(table_three) == "p value"] <- "P值"
+  if(length(group_type) > 2 | all(data_type == "categorical"))
+      table_three <- table_three[, -c(ncol(table_three)-2)]
+     #如果组别大于2或者都是分类变量，则不输出置信区间
+  
+  if(all(table_three$`统计量` == "")) #分类变量中用fe精确检验没有统计量
+      table_three <- table_three[, -c(ncol(table_three)-1)]
+  
+  if(length(group_type) == 2){
+      table_three$`检验方法`[table_three$`检验方法` == "Kruskal-Wallis rank sum test"] <- "Wilcoxon rank sum tests"
+      table_three$`检验方法`[table_three$`检验方法` == "Linear Model ANOVA"] <- "t-test"
+      
+      for (i in 1:nrow(table_three)) {
+        if(is.na(table_three$`P值`[i]))
+          table_three$`P值`[i] <- ""
+        else if(table_three$`P值`[i] == "1" | table_three$`P值`[i] == "1.000")
+          table_three$`P值`[i] <- "> 0.999"
+        else if(table_three$`P值`[i] == "0" | table_three$`P值`[i] == "0.000")
+          table_three$`P值`[i] <- "< 0.001"
+      }
+  }else{
+      for (i in 1:nrow(table_three)) {
+        if(is.na(table_three$`P值`[i]))
+          table_three$`P值`[i] <- ""
+        else if(table_three$`P值`[i] == "1.000")
+          table_three$`P值`[i] <- "> 0.999"
+      }
+  }
+  }
+  myft <- 0
+  if(test == FALSE){
+    if(length(unique(na.omit(dataset$group))) > 1){
+        my_controls <- tableby.control(
+        test = FALSE, total = TRUE,
+        numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+        cat.stats = c("countpct", "Nmiss2"),
+        stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                             range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2)
+    table_three <- tableby(group ~.,control = my_controls, data = dataset)
+    table_three <- summary(table_three, text = TRUE, na.rm = TRUE)
+    table3 <- as.data.frame(table_three$object)
+    table_three <- as.data.frame(table_three)
+    table_three[, 1] <- table3[, "group.label"]
+    names(table_three)[1] <- "变量名"
+    }
+    if(length(unique(na.omit(dataset$group))) == 1){
+      title <- unique(na.omit(dataset$group))
+      title <- paste("数据分类", title, sep = "：")
+      temp1T <- compareGroups(~., data = dataset, method = 3, alpha= 0.01, simplify = FALSE, ref = 2, max.xlev = 100)
+      temp1Tab <- createTable(temp1T, type = 2, digits=2, show.all=TRUE, show.p.trend=FALSE,show.p.overall = FALSE,  show.ratio=FALSE, sd.type = 2, q.type = c(1,2))
+      temp2Tab <- as.data.frame(temp1Tab$descr)
+      temp2Tab <- temp2Tab[-1, ]
+      names(temp2Tab) <- c("频数(%)", "总数")
+      temp2Tab$`变量名` <- rownames(temp2Tab)
+      temp2Tab <- temp2Tab[, c(ncol(temp2Tab),1:ncol(temp2Tab)-1)]
+      for(i in 1:ncol(temp2Tab)){
+        temp2Tab[, i] <- as.character(temp2Tab[, i])
+      }
+      myft <- regulartable(temp2Tab, 
+           col_keys = names(temp2Tab))
+      myft <- add_header(myft, "变量名" = TRUEitle, "频数(%)" = TRUEitle, "总数" = TRUEitle, top = TRUE)
+      myft <- merge_h(myft, part = "header")
+      myft <- merge_v(myft, part = "header")
+      myft <- theme_vanilla(myft)
+      myft <- bg(myft, i = 1:2, bg = "#ADADAD", part = "header")
+      myft <- align(myft, align = "center", part = "all" )
+      myft <- border_remove(myft)
+      myft <- hline_top(myft, part = "header", border = fp_border(width = 1))
+      myft <- hline_bottom(myft, part = "header", border = fp_border(width = 1))
+      myft <- hline(myft, i = 1, part = "header", border = fp_border(width = 1))
+      myft <- hline_bottom(myft, part = "body", border = fp_border(width = 1))
+      myft <- width(myft, j = 1,  width = 1.5)
+      myft <- width(myft, j = 2:ncol(table1),  width = 0.8)
+      
+    }
+  }
+  if((output == TRUE | output == FALSE) & length(myft) > 2){
+    myft
+  }else if(output == TRUE & is.data.frame(table_three)){
+    output1(table_three)
+  }else{
+    table_three
+  }
+}
+```
+
+
+```{r}
+#变量的组间比较
+##dataset是分析数据集，组别必须放到第一列；output控制是否以三线表输出，默认为TRUE，输出三线表，output=FLASE表示输出格式为data.frame；参数Test是控制是否输出检验结果，默认为TRUE，输出检验结果，否则不输出检验结果。存在的问题：存在的检验是否需要校正correct = TRUE？
+Group1 <- function(dataset, output = TRUE, test = TRUE){
+  names(dataset)[1] <- "group"
+  if(length(unique(na.omit(dataset$group))) == 1 & test == TRUE){
+    table_three <- "单组分析，无法进行检验，请调整参数：test==FALSE"
+  }
+  if(length(unique(na.omit(dataset$group))) == 0){
+    table_three <- "无数据，无法进行分析"
+  }
+  if(length(unique(na.omit(dataset$group))) > 1 & test == TRUE){
+    for (k in 1:ncol(dataset)) {
+    #由于tableby对于全部缺失且类型为数值型（num）变量无法使用，转为logi型可以统计。
+    if(sum(!is.na(dataset[, k])) == 0)
+      dataset[, k] <- as.logical(dataset[, k])
+  }
+  table_one <- tableby(group ~., data = dataset)
+  table_one <- summary(table_one, text = TRUE, na.rm=TRUE)
+  table1 <- as.data.frame(table_one$object)
+  data_type <- table1[table1[, 8] == "", 7]
+  group_type <- unique(dataset$group)
+  add_list1 <- vector(mode = "numeric", length = length(group_type))
+  add_list2 <- vector(mode = "numeric", length = length(group_type))
+  add_list3 <- vector(mode = "numeric", length = length(group_type))
+  for (i in 1:length(data_type)) {
+    if(data_type[i] == "numeric"){
+      for (l in 1:length(group_type)) {
+        group_level <- subset(dataset, dataset$group == group_type[l])
+        add_list2[l] <- sum(!is.na(unique(group_level[, i+1])))#组内变量取值的水平个数
+        add_list3[l] <- sum(!is.na(group_level[, i+1]))#组内变量样本数
+       if(add_list2[l] >= 2 & add_list3[l] >= 3 & add_list3[l] <= 5000){   
+         #shapiro.test函数要求3<=样本量<=5000,且所有的数据不能完全相同
+          add_list1[l] <- shapiro.test(group_level[, i+1])$p.value
+        }else
+          add_list1[l] <- 0
+      }
+      
+        if(all(add_list1 > 0.05)){
+          num_way <-  "anova"
+        }else
+          num_way <-  "kwt"
+      }else{
+        num_way <-  "anova"
+    }
+              
+    if(data_type[i] == "categorical"){
+        cate_result <- tableby(group ~., data = dataset[, c(1,i+1)])
+        cate_result <- summary(cate_result, text = TRUE, na.rm=TRUE)
+        cate_result <- as.data.frame(cate_result)
+        if(sum(is.na(dataset[, c(i+1)])) == 0)
+          cate_result <- cate_result[-1, -c(1,ncol(cate_result))] 
+        else
+          cate_result <- cate_result[-c(1,2), -c(1,ncol(cate_result))] 
+        #如果分类变量存在缺失第一行和第二行都去掉（名称和缺失）
+        for (j in 1:ncol(cate_result)) {
+          cate_result[, j] <- gsub("\\(.*\\)","",cate_result[, j])
+          cate_result[, j] <- as.numeric(cate_result[, j])
+        }
+        cate_result[nrow(cate_result)+1,] <- colSums(cate_result[, 1:ncol(cate_result)])
+        cate_result <- cate_result[, c(ncol(cate_result),1:(ncol(cate_result)-1))]
+        
+        if(nrow(cate_result) > 2){
+        ##exp_fre是计算期望频数
+          exp_fre <- matrix(nrow = nrow(cate_result)-1, ncol = ncol(cate_result)-1)
+          for (k in 1:(nrow(cate_result)-1)) {
+              for (j in 1:(ncol(cate_result)-1)) {
+                exp_fre[k ,j] <- (cate_result[k, 1]*cate_result[nrow(cate_result), j+1])/cate_result[nrow(cate_result), 1]
+              }
+          }
+
+          if((nrow(exp_fre) == 2 & ncol(exp_fre) == 2) & ((cate_result[nrow(cate_result),1] < 40 | any(exp_fre < 1) == TRUE) | (cate_result[nrow(cate_result),1] >= 40 & any(exp_fre < 5 & exp_fre >= 1) == TRUE))){  
+            #完全随机设计四格表资料。1.当样本总例数n<40或至少存在一个期望频数T<1时，只能使用Fisher确切概率法；2.当样本总例数n≥40且至少存在一个期望频数1≤T<5时，使用校正卡方检验或Fisher确切概率法（这里我们只选择使用Fisher确切概率法）。
+            cate_way <- "fe"
+          }else if((nrow(exp_fre) > 2 | ncol(exp_fre) > 2) & (nrow(exp_fre) != 2 & ncol(exp_fre) != 2) & (any(exp_fre < 1) == TRUE | length(which(exp_fre < 5 & exp_fre >= 1)) > ((nrow(cate_result)-1)*(ncol(cate_result)-1))/5)){
+            #完全随机设计R×C资料。当至少存在一个期望频数T<1或期望频数1≤T<5的格子数超过总格子数的1/5时，使用Fisher确切概率法。
+            cate_way <- "fe"
+          }else{
+            cate_way <- "chisq"
+          }
+        }else{
+          cate_way <- "chisq"
+        }
+    }else{
+       cate_way <- "chisq"
+    }
+        
+        my_controls <- tableby.control(
+        test = TRUE, total = TRUE,
+        numeric.test = num_way, cat.test = cate_way,
+        numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+        cat.stats = c("countpct", "Nmiss2"),
+        stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                             range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2)
+        table_two <- tableby(group ~.,control = my_controls, data = dataset[, c(1,i+1)])
+        table_two <- summary(table_two, text = TRUE, na.rm=F)
+        table2 <- as.data.frame(table_two$object)#####对象是？
+        table_two <- as.data.frame(table_two)
+        
+        table_two[, c(1,ncol(table_two)+1)] <- table2[, c("group.label","group.test")]
+        table_two[table_two$`p value` == "", ncol(table_two)] <- ""
+        table_two$`统计量` <- ""
+        table_two$`95%CI` <- ""
+        table_two <- table_two[, c(1:(ncol(table_two)-4),ncol(table_two)-2,ncol(table_two),ncol(table_two)-1,ncol(table_two)-3)]
+        
+        if(data_type[i] == "categorical"){
+          cate_data <- cate_result[-nrow(cate_result), -1]
+          if(nrow(cate_result) > 2){  #求统计量和P值。（存在一个问题：2×2资料tableby卡方检验求出的P值与chisq.test求出的P值不同）
+            if(cate_way == "chisq"){
+              table_two$`统计量`[1] <- paste("X-squared =", round(chisq.test(cate_data, correct = F)$statistic, 2))
+              table_two$`p value`[1] <- sprintf("%.3f", chisq.test(cate_data, correct = F)$p.value)                 
+                                        #sprintf输出字符型的有效数字,round最后0无法显示
+            }else if(cate_way == "fe"){
+            #table_two$`统计量`[1] <- round(fisher.test(cate_data)$statistic, 2)
+            }
+          }else{
+            table_two$`p value`[1] <- "-"
+            table_two$`统计量`[1] <- "-"
+            table_two$group.test[1] <- "-"
+          }
+        }
+        
+        if(data_type[i] == "numeric"){ #求出统计量
+          add_list1 <- round(add_list1, 3)
+          for (m in 1:length(group_type)) {
+            if(add_list1[m] < 0.001)
+              add_list1[m] <- "< 0.001"
+          }
+          table_two[nrow(table_two)+1, 1] <- "正态性检验P值"
+          table_name <- colnames(table_two)[2:(length(add_list1)+1)]
+          table_name <- gsub(" \\(.*\\)","",table_name)
+          for (l in 1:length(add_list1)) {
+            for (n in 1:length(add_list1)) {
+              if(table_name[l] == group_type[n])
+                table_two[nrow(table_two), l+1] <- add_list1[n]
+            }
+          }
+          add_list1 <- vector(mode = "numeric", length = length(group_type))
+          #上面把add_list1变为了字符型，需要重新定义add_list1，不然round函数第二次无法使用
+          
+          add_list4 <- vector(mode = "numeric", length = length(group_type))
+          #计算每个组不为缺失（NA）的个数（至少每个组有一个数据才能进行以下的检验）
+          for (j in 1:length(group_type)) {
+            add_list4[j] <- sum(!is.na(dataset[dataset$group == group_type[j], i+1]))
+          }
+          if(all(add_list4) > 0){
+            dataset[, c(1,i+1)]$group <- as.factor(dataset[, c(1,i+1)]$group)
+            names(dataset)[c(1,i+1)] <- gsub("-", "_", names(dataset)[c(1,i+1)]) #as.formula函数对一些字符无法识别，需要替换
+            names(dataset)[c(1,i+1)] <- gsub("/", "_", names(dataset)[c(1,i+1)])
+            names(dataset)[c(1,i+1)] <- gsub(" ", "", names(dataset)[c(1,i+1)])
+            names(dataset)[c(1,i+1)] <- gsub("\\(", "", names(dataset)[c(1,i+1)])
+            names(dataset)[c(1,i+1)] <- gsub("\\)", "", names(dataset)[c(1,i+1)])
+            names(dataset)[c(1,i+1)] <- gsub("（", "", names(dataset)[c(1,i+1)])
+            names(dataset)[c(1,i+1)] <- gsub("）", "", names(dataset)[c(1,i+1)])
+            gongshi <- as.formula(paste(names(dataset)[i+1], "~", names(dataset)[1]))
+            if(num_way== "anova"){ #两组的组间比较，使用t.test检验求出统计量和置信区间
+            summary_aov <- summary(aov(gongshi, data = dataset[, c(1,i+1)]))[[1]]$`F value`[1]
+            if(length(group_type) == 2){
+              table_two$`统计量`[1] <- paste("T =", round(t.test(gongshi, data = dataset[, c(1,i+1)], var.equal = TRUE)$statistic, 2))
+              conf_int <- t.test(gongshi, data = dataset[, c(1,i+1)], var.equal = TRUE)$conf.int
+              table_two$`95%CI`[1] <- paste("(", round(conf_int[1], 3), ",", round(conf_int[2], 3), ")")
+              table_two$`p value`[1] <- sprintf("%.3f", t.test(gongshi, data = dataset[, c(1,i+1)], var.equal = TRUE)$p.value)
+            }else{
+              table_two$`统计量`[1] <- paste("F =", round(summary_aov, 2))
+              #table_two$`p value`[1] <- sprintf("%.3f", summary_aov$p.value)
+            }
+          }else if(num_way== "kwt" ){ #两组的组间比较，使用wilcox.test检验求出统计量和置信区间
+            if(length(group_type) == 2){
+              table_two$`统计量`[1] <- paste("W =", round(wilcox.test(gongshi, data = dataset[, c(1,i+1)])$statistic, 2))
+              if(length(unique(dataset[!is.na(dataset[, i+1]), i+1])) != 1){ #所有值相等，无法计算置信区间
+                conf_int <- wilcox.test(gongshi, data = dataset[, c(1,i+1)], conf.int = TRUE)$conf.int
+                table_two$`95%CI`[1] <- paste("(", round(conf_int[1], 3), ",", round(conf_int[2], 3), ")")
+              } #是否需要加else
+              
+              table_two$`p value`[1] <- sprintf("%.3f", wilcox.test(gongshi, data = dataset[, c(1,i+1)])$p.value)
+            }else{
+              table_two$`统计量`[1] <- paste("X-squared =", round(kruskal.test(gongshi, data = dataset[, c(1,i+1)])$statistic, 2))
+            }
+            #计算非参检验（秩和检验）的平均秩
+            rank_calculate <- dataset[, c(1,i+1)]
+            rank_calculate$`秩次`[!is.na(rank_calculate[, 2])] <- rank(rank_calculate[!is.na(rank_calculate[, 2]), 2])
+            table_two[nrow(table_two)+1, 1] <- "平均秩"
+            for (k in 2:(length(group_type)+1)) {
+               table_two[nrow(table_two), k] <- round(mean(rank_calculate[rank_calculate$group == gsub(" \\(.*\\)","",names(table_two)[k]), 3], na.rm = TRUE), 3)
+            }
+            table_two[nrow(table_two), ncol(table_two)-4] <- round(mean(rank_calculate[, 3], na.rm = TRUE), 3)
+            table_two <- table_two[c(1:(nrow(table_two)-2),nrow(table_two),nrow(table_two)-1),]
+          }
+          if(table_two$group.test[1] == ""){
+            table_two$`统计量`[1] <-  ""
+          }
+          }
+        }
+        
+        names(table_two)[1] <- "变量"
+        if(i==1){
+          table_three <- table_two
+        }else{
+          table_three <- rbind(table_three,table_two)
+        }
+  }
+  names(table_three) <- gsub("Total", "总计", names(table_three))
+  names(table_three)[names(table_three) == "group.test"] <- "检验方法"
+  names(table_three)[names(table_three) == "p value"] <- "P值"
+  if(length(group_type) > 2 | all(data_type == "categorical"))
+      table_three <- table_three[, -c(ncol(table_three)-2)]
+     #如果组别大于2或者都是分类变量，则不输出置信区间
+  
+  if(all(table_three$`统计量` == "")) #分类变量中用fe精确检验没有统计量
+      table_three <- table_three[, -c(ncol(table_three)-1)]
+  
+  if(length(group_type) == 2){
+      table_three$`检验方法`[table_three$`检验方法` == "Kruskal-Wallis rank sum test"] <- "Wilcoxon rank sum tests"
+      table_three$`检验方法`[table_three$`检验方法` == "Linear Model ANOVA"] <- "t-test"
+      
+      for (i in 1:nrow(table_three)) {
+        if(is.na(table_three$`P值`[i]))
+          table_three$`P值`[i] <- ""
+        else if(table_three$`P值`[i] == "1" | table_three$`P值`[i] == "1.000")
+          table_three$`P值`[i] <- "> 0.999"
+        else if(table_three$`P值`[i] == "0" | table_three$`P值`[i] == "0.000")
+          table_three$`P值`[i] <- "< 0.001"
+      }
+  }else{
+      for (i in 1:nrow(table_three)) {
+        if(is.na(table_three$`P值`[i]))
+          table_three$`P值`[i] <- ""
+        else if(table_three$`P值`[i] == "1.000")
+          table_three$`P值`[i] <- "> 0.999"
+      }
+  }
+  }
+  myft <- 0
+  if(test == FALSE){
+    if(length(unique(na.omit(dataset$group))) > 1){
+        my_controls <- tableby.control(
+        test = FALSE, total = TRUE,
+        numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+        cat.stats = c("countpct", "Nmiss2"),
+        stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                             range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2)
+    table_three <- tableby(group ~.,control = my_controls, data = dataset)
+    table_three <- summary(table_three, text = TRUE, na.rm = TRUE)
+    table3 <- as.data.frame(table_three$object)
+    table_three <- as.data.frame(table_three)
+    table_three[, 1] <- table3[, "group.label"]
+    names(table_three)[1] <- "变量名"
+    }
+    if(length(unique(na.omit(dataset$group))) == 1){
+      title <- unique(na.omit(dataset$group))
+      title <- paste("数据分类", title, sep = "：")
+      temp1T <- compareGroups(~., data = dataset, method = 3, alpha= 0.01, simplify = FALSE, ref = 2, max.xlev = 100)
+      temp1Tab <- createTable(temp1T, type = 2, digits=2, show.all=TRUE, show.p.trend=FALSE,show.p.overall = FALSE,  show.ratio=FALSE, sd.type = 2, q.type = c(1,2))
+      temp2Tab <- as.data.frame(temp1Tab$descr)
+      temp2Tab <- temp2Tab[-1, ]
+      names(temp2Tab) <- c("频数(%)", "总数")
+      temp2Tab$`变量名` <- rownames(temp2Tab)
+      temp2Tab <- temp2Tab[, c(ncol(temp2Tab),1:ncol(temp2Tab)-1)]
+      for(i in 1:ncol(temp2Tab)){
+        temp2Tab[, i] <- as.character(temp2Tab[, i])
+      }
+      myft <- regulartable(temp2Tab, 
+           col_keys = names(temp2Tab))
+      myft <- add_header(myft, "变量名" = TRUEitle, "频数(%)" = TRUEitle, "总数" = TRUEitle, top = TRUE)
+      myft <- merge_h(myft, part = "header")
+      myft <- merge_v(myft, part = "header")
+      myft <- theme_vanilla(myft)
+      myft <- bg(myft, i = 1:2, bg = "#ADADAD", part = "header")
+      myft <- align(myft, align = "center", part = "all" )
+      myft <- border_remove(myft)
+      myft <- hline_top(myft, part = "header", border = fp_border(width = 1))
+      myft <- hline_bottom(myft, part = "header", border = fp_border(width = 1))
+      myft <- hline(myft, i = 1, part = "header", border = fp_border(width = 1))
+      myft <- hline_bottom(myft, part = "body", border = fp_border(width = 1))
+      myft <- width(myft, j = 1,  width = 1.5)
+      myft <- width(myft, j = 2:ncol(table1),  width = 0.8)
+      
+    }
+  }
+  if((output == TRUE | output == FALSE) & length(myft) > 2){
+    myft
+  }else if(output == TRUE & is.data.frame(table_three)){
+    output1(table_three)
+  }else{
+    table_three
+  }
+}
+```
+
+```{r}
+#函数说明：有序等级资料的秩和检验，第一列为组别，后面都是有序的等级资料，等级资料的数据格式为：Factor类型。 （需要改变）
+Ordered_group <- function(aa1){
+  my_controls <- tableby.control(
+        test = TRUE, total = TRUE,
+        numeric.test = "anova", cat.test = "chisq",
+        numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+        cat.stats = c("countpct", "Nmiss2"),
+        stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                             range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2)
+  names(aa1)[1] <- "group"
+  group_type <- unique(aa1$group)
+  for (i in 2:ncol(aa1)) {
+    bb1 <- aa1[, c(1,i)]
+    table_one <- tableby(group~., control = my_controls, data = bb1)
+    table_one <- summary(table_one, text = TRUE, na.rm=TRUE)
+    table_one <- as.data.frame(table_one)
+    table_one[, 1] <- gsub("-  ", "", table_one[, 1])
+    if(("减轻" %in% bb1[, 2]) | ("加重" %in% bb1[, 2])){
+       bb1[, 2] <- factor(bb1[, 2], levels = c("无", "减轻", "不变", "加重"), labels = c(1,2,3,4)) #不同的变量需要变化
+    }else if(("好转" %in% bb1[, 2]) | ("恶化" %in% bb1[, 2])){
+       bb1[, 2] <- factor(bb1[, 2], levels = c("好转", "无变化", "恶化"), labels = c(1,2,3)) #不同的变量需要变化
+    }else if(("降低" %in% bb1[, 2]) | ("增加" %in% bb1[, 2])){
+       bb1[, 2] <- factor(bb1[, 2], levels = c("降低", "无变化", "增加"), labels = c(1,2,3)) #不同的变量需要变化
+    }else if(("7-死亡" %in% bb1[, 2]) | ("4-住院接受氧疗" %in% bb1[, 2]) | ("3-住院不需要接受氧疗" %in% bb1[, 2]) | ("2-出院但未恢复正常功能状态" %in% bb1[, 2])){
+       bb1[, 2] <- factor(bb1[, 2], levels = c("7-死亡", "6-住院接受ECMO和／或机械通气","5-住院接受无创通气和／或高流量氧疗","4-住院接受氧疗","3-住院不需要接受氧疗","2-出院但未恢复正常功能状态","1-出院已恢复正常功能状态"), labels = c(7,6,5,4,3,2,1))
+    }
+    bb1[, 2] <- as.numeric(bb1[, 2])
+    table_one$`group.test` <- ""
+    table_one$`95%CI` <- ""
+    table_one$`统计量` <- ""
+    names(bb1) <- gsub("-", "_", names(bb1))
+    names(bb1) <- gsub("/", "_", names(bb1))
+    names(bb1) <- gsub(" ", "", names(bb1))
+    names(bb1) <- gsub("\\(", "", names(bb1))
+    names(bb1) <- gsub("\\)", "", names(bb1))
+    names(bb1) <- gsub("（", "", names(bb1))
+    names(bb1) <- gsub("）", "", names(bb1))    
+    gongshi <- as.formula(paste(names(bb1)[2], "~", names(bb1)[1]))
+    if(length(group_type) == 2){
+      wilcox <- wilcox.test(gongshi, data= bb1, conf.int = TRUE)
+      table_one$`group.test`[1] <- "Wilcoxon rank sum test"
+      table_one$`95%CI`[1] <- paste("(", round(wilcox$conf.int[1], 3), ",", round(wilcox$conf.int[2], 3), ")")
+      table_one$`统计量`[1] <- paste("W =", sprintf("%.2f", wilcox$statistic))
+      table_one$`p value`[1] <- sprintf("%.3f", wilcox$p.value)
+    }else{
+      kruskal <- kruskal.test(gongshi, data= bb1)
+      table_one$`group.test`[1] <- "Kruskal-Wallis rank sum test"
+      table_one$`统计量`[1] <- paste("X-squared =", sprintf("%.2f", kruskal$statistic))
+      table_one$`p value`[1] <- sprintf("%.3f", kruskal$p.value)
+    }
+    table_one <- table_one[, c(1:(ncol(table_one)-4), ncol(table_one)-2, ncol(table_one)-1, ncol(table_one), ncol(table_one)-3)]
+    names(table_one)[1] <- "变量"
+    names(table_one)[ncol(table_one)] <- "P值"
+    
+    table_one[nrow(table_one)+1, 1] <- "平均秩" #下面计算平均秩(造成出现一行NA)
+    # bb1 <- bb1[order(bb1[, 2], decreasing = F),]
+    # bb1$`秩序` <- 1:nrow(bb1)
+    # bb1$`平均秩` <- NA
+    # for (j in 1:sum(!is.na(unique(bb1[, 2])))) {
+    #   bb1$`平均秩`[bb1[!is.na(bb1[, 2]), 2] == unique(bb1[!is.na(bb1[, 2]), 2])[j]] <- (which.first(bb1[!is.na(bb1[, 2]), 2] == unique(bb1[!is.na(bb1[, 2]), 2])[j]) + which.last(bb1[!is.na(bb1[, 2]), 2] == unique(bb1[!is.na(bb1[, 2]), 2])[j]))/2
+    # }
+    # for (k in 2:(length(group_type)+1)) {
+    #    table_one[nrow(table_one), k] <- round(mean(bb1[bb1$group == gsub(" \\(.*\\)","",names(table_one)[k]), 4]), 3)
+    # }
+    # table_one[nrow(table_one), ncol(table_one)-4] <- round(mean(bb1[, 4]), 3) #describeBy
+    
+    bb1$`秩次`[!is.na(bb1[, 2])] <- rank(bb1[!is.na(bb1[, 2]), 2])
+    for (k in 2:(length(group_type)+1)) {
+        table_one[nrow(table_one), k] <- round(mean(bb1[bb1$group == gsub(" \\(.*\\)","",names(table_one)[k]), 3], na.rm = TRUE), 3)
+    }
+    table_one[nrow(table_one), ncol(table_one)-4] <- round(mean(bb1[, 3], na.rm = TRUE), 3)
+    table_one <- table_one[c(1:(nrow(table_one)-2),nrow(table_one),nrow(table_one)-1),]
+
+    if(all(!is.na(table_one$`95%CI`) == "")){
+      table_one <- table_one[, -c(ncol(table_one)-2)]
+    }
+    if(i==2)
+      table_two <- table_one
+    else
+      table_two <- rbind(table_two, table_one)
+  }
+  for (i in 1:nrow(table_two)) {
+    if(is.na(table_two$`P值`[i]))
+      table_two$`P值`[i] <- ""
+    else if(table_two$`P值`[i] == "1.000")
+      table_two$`P值`[i] <- "> 0.999"
+    else if(table_two$`P值`[i] == "0.000")
+      table_two$`P值`[i] <- "< 0.001"
+  }
+  output1(table_two)
+}
+```
+
+```{r}
+#函数说明：有序等级资料的秩和检验，第一列为组别，后面都是有序的等级资料，等级资料的数据格式为：Factor类型。（与上面的差距是在外部处理数据）
+
+#注释为数据处理方法
+# aa2 <- data[, c(3,15,16)]
+# aa1 <- aa2
+# for (j in 2:ncol(aa2)) {
+#   aa1[, j] <- factor(aa1[, j], levels = c("好转","无变化","恶化"), labels = c("好转","无变化","恶化"))
+#   aa1[, j+ncol(aa2)-1] <- factor(aa1[, j], levels = c("好转","无变化","恶化"), labels = c(1,2,3))
+#   names(aa1)[j+ncol(aa2)-1] <- paste(names(aa1)[j], "_数值化", sep = "")
+# }
+
+Ordered_group1 <- function(aa1){
+ my_controls <- tableby.control(
+        test = TRUE, total = TRUE,
+        numeric.test = "anova", cat.test = "chisq",
+        numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+        cat.stats = c("countpct", "Nmiss2"),
+        stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                             range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2)
+  names(aa1)[1] <- "group"
+  group_type <- unique(aa1$group)
+  for (i in 2:((ncol(aa1)+1)/2)) {
+    bb1 <- aa1[, c(1,i,i+(ncol(aa1)-1)/2)]
+    table_one <- tableby(group~., control = my_controls, data = bb1[, c(1,2)])
+    table_one <- summary(table_one, text = TRUE, na.rm=TRUE)
+    table_one <- as.data.frame(table_one)
+    table_one[, 1] <- gsub("-  ", "", table_one[, 1])
+    bb1[, 3] <- as.numeric(bb1[, 3])
+    table_one$`group.test` <- ""
+    table_one$`95%CI` <- ""
+    table_one$`统计量` <- ""
+    names(bb1) <- gsub("-", "_", names(bb1))
+    names(bb1) <- gsub("/", "_", names(bb1))
+    names(bb1) <- gsub(" ", "", names(bb1))
+    names(bb1) <- gsub("\\(", "", names(bb1))
+    names(bb1) <- gsub("\\)", "", names(bb1))
+    names(bb1) <- gsub("（", "", names(bb1))
+    names(bb1) <- gsub("）", "", names(bb1))    
+    gongshi <- as.formula(paste(names(bb1)[3], "~", names(bb1)[1]))
+    if(length(group_type) == 2){
+      wilcox <- wilcox.test(gongshi, data= bb1[, c(1,3)], conf.int = TRUE)
+      table_one$`group.test`[1] <- "Wilcoxon rank sum test"
+      table_one$`95%CI`[1] <- paste("(", round(wilcox$conf.int[1], 3), ",", round(wilcox$conf.int[2], 3), ")")
+      table_one$`统计量`[1] <- paste("W =", sprintf("%.2f", wilcox$statistic))
+      table_one$`p value`[1] <- sprintf("%.3f", wilcox$p.value)
+    }else{
+      kruskal <- kruskal.test(gongshi, data= bb1[, c(1,3)])
+      table_one$`group.test`[1] <- "Kruskal-Wallis rank sum test"
+      table_one$`统计量`[1] <- paste("X-squared =", sprintf("%.2f", kruskal$statistic))
+      table_one$`p value`[1] <- sprintf("%.3f", kruskal$p.value)
+    }
+    table_one <- table_one[, c(1:(ncol(table_one)-4), ncol(table_one)-2, ncol(table_one)-1, ncol(table_one), ncol(table_one)-3)]
+    names(table_one)[1] <- "变量"
+    names(table_one)[ncol(table_one)] <- "P值"
+    
+    table_one[nrow(table_one)+1, 1] <- "平均秩" #下面计算平均秩(造成出现一行NA)
+    bb1 <- bb1[order(bb1[, 3], decreasing = F),]
+    bb1$`秩序` <- 1:nrow(bb1)
+    bb1$`平均秩` <- NA
+    for (j in 1:sum(!is.na(unique(bb1[, 3])))) {
+      bb1$`平均秩`[bb1[!is.na(bb1[, 3]), 3] == unique(bb1[!is.na(bb1[, 3]), 3])[j]] <- (which.first(bb1[!is.na(bb1[, 3]), 3] == unique(bb1[!is.na(bb1[, 3]), 3])[j]) + which.last(bb1[!is.na(bb1[, 3]), 3] == unique(bb1[!is.na(bb1[, 3]), 3])[j]))/2
+    }
+    bb1[is.na(bb1[, 3]), 5] <- NA  #使缺失数据的平均秩为NA，从而计算均值时不纳入计算；
+    for (k in 2:(length(group_type)+1)) {
+       table_one[nrow(table_one), k] <- round(mean(bb1[bb1$group == gsub(" \\(.*\\)","",names(table_one)[k]), 5], na.rm = TRUE), 3)
+    }
+    table_one[nrow(table_one), ncol(table_one)-4] <- round(mean(bb1[, 5], na.rm = TRUE), 3) #describeBy
+    table_one <- table_one[c(1:(nrow(table_one)-2), nrow(table_one), nrow(table_one)-1),]
+    if(all(!is.na(table_one$`95%CI`) == "")){
+      table_one <- table_one[, -c(ncol(table_one)-2)]
+    }
+    if(i==2)
+      table_two <- table_one
+    else
+      table_two <- rbind(table_two, table_one)
+  }
+  for (i in 1:nrow(table_two)) {
+    if(is.na(table_two$`P值`[i]))
+      table_two$`P值`[i] <- ""
+    else if(table_two$`P值`[i] == "1.000")
+      table_two$`P值`[i] <- "> 0.999"
+    else if(table_two$`P值`[i] == "0.000")
+      table_two$`P值`[i] <- "< 0.001"
+  }
+  output1(table_two)
+}
+```
+
+```{r}
+#函数说明：协方差分析；数据说明：第一列为组别，第二例为协变量(分类变量)，结局变量是连续变量.（需要增加协变量为连续变量）
+ANCOVA_categorical <- function(aa1){
+  for (i in 3:ncol(aa1)) {
+    gongshi <- paste(names(aa1)[c(1,2)], collapse = "*")
+    gongshi1 <- as.formula(paste(names(aa1)[i], "~", gongshi))
+    result <- aov(gongshi1, data = aa1)
+    result1 <- as.data.frame(summary(result)[[1]])
+    result1[, 2:5] <- round(result1[, 2:5], 3)
+    result1$Variable <- rownames(result1)
+    result1 <- result1[,c(ncol(result1),1:ncol(result1)-1)]
+    result1[nrow(result1)+1,] <- ""
+    result1[nrow(result1), 1] <- names(aa1)[i]
+    result1 <- result1[c(nrow(result1),1:nrow(result1)-1),]
+    if(i==3)
+      result2 <- result1
+    else
+      result2 <- rbind(result2, result1)
+  }
+  output1(result2)
+}
+```
+
+```{r}
+#函数说明：分类变量校正的组间比较，数据第一列为组别，调整变量放在第二列，比较变量放在后面（是否添加优势比？）
+Adjust_group <- function(aa1){
+  my_controls <- tableby.control(
+        test = TRUE, total = TRUE,
+        numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+        cat.stats = c("countpct", "Nmiss2"),
+        stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                            range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2)
+  for (i in 3:ncol(aa1)) {
+    table_one <- tableby(aa1[, 1] ~ interaction(aa1[, 2], aa1[, i], sep = "："), control = my_controls, data = aa1)
+    table_one <- summary(table_one, text = TRUE, na.rm=TRUE)
+    table1 <- as.data.frame(table_one$object)
+    table_one <- as.data.frame(table_one)
+    table_one[, 1] <- table1[, 6]
+    table_one$`group.test` <- ""
+    table_one$`95%CI` <- ""
+    table_one$`统计量` <- ""
+    gongshi <- paste(names(aa1)[c(i,1,2)], collapse = "+")
+    gongshi1 <- as.formula(paste("~", gongshi))
+    table_two <- xtabs(gongshi1, data=aa1)
+    test <- mantelhaen.test(table_two) #2×2存在优势比
+    if(nrow(as.data.frame(table(aa1[, i]))) == 2 & length(unique(aa1[, 1])) == 2){
+      table_one$`统计量`[1] <- paste("X-squared =", sprintf("%.3f", test$statistic))
+      table_one$`95%CI`[1] <- paste("(", round(test$conf.int[1], 3), ",", round(test$conf.int[2], 3), ")")
+      table_one$`group.test`[1] <- test$method
+      table_one$`p value`[1] <- sprintf("%.3f", test$p.value)
+    }else{
+      table_one$`统计量`[1] <- paste("M^2 =", sprintf("%.3f", test$statistic))
+      table_one$`group.test`[1] <- test$method
+      table_one$`p value`[1] <- sprintf("%.3f", test$p.value)
+    }
+    table_one[1,1] <- paste("interaction", "(", names(aa1)[2],"," ,names(aa1)[i], ")")
+    if(i==3)
+      table_three <- table_one
+    else
+      table_three <- rbind(table_three, table_one)
+  }
+  names(table_three)[names(table_three) == "p value"] <- "P值"
+  names(table_three)[1] <- "变量"
+  table_three <- table_three[, c(1:(ncol(table_three)-4), (ncol(table_three)-2):ncol(table_three), (ncol(table_three)-3))]
+  if(all(table_three$`95%CI` == ""))
+    table_three <- table_three[, -(ncol(table_three)-2)]
+  for (i in 1:nrow(table_three)) {
+    if(table_three$`P值`[i] == "1.000")
+      table_three$`P值`[i] <- "> 0.999"
+    else if(table_three$`P值`[i] == "0.000")
+      table_three$`P值`[i] <- "< 0.001"
+  }
+  output1(table_three)
+}
+```
+
+```{r}
+#函数说明：分类变量调整（分层）的组间比较。
+##函数使用说明：1、分类变量调整的组间比较，数据第一列为组别，调整（分层）变量放在第二列，比较变量放在后面；2、对于2×2×k表格，2×2存在优势比，所以需要将组别和该变量的使用factor函数进行调整顺序，保证OR值的正确。
+##输出结果说明：1、2×2的优势比（OR值）是公共优势比，如果优势比齐次性检验P值>0.05，可认为每层的优势比之间是没有差异的，则公共优势比是有意义的；反之亦然；置信区间同理。
+###待解决问题：1.连续校正的问题？2.另一个问题是，怎样对存在有序变量进行检验？存在三种情况：分层变量是有序的；比较变量是有序的；分层和比较变量都是有序的。生存分析的中心效应分析方法一样吗？3.如果存在一些分层是一维的，mantelhaen.test无法使用，且优势比齐次性检验P值<0.05，则公共优势比没有意义，mantelhaen.test不适用，将对于每层使用fish精确检验/卡方检验。4.如果变量有3个元素，但是只存在其中两个元素，这样给出的OR值以及检验方法是否合理？
+Adjust_group1 <- function(aa1){
+  my_controls <- tableby.control(
+        test = TRUE, total = TRUE,
+        numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+        cat.stats = c("countpct", "Nmiss2"),
+        stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                            range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2)
+  elements <- unique(aa1[!is.na(aa1[, 2]), 2])
+  for (i in 3:ncol(aa1)) {
+    table_one <- tableby(aa1[, 1] ~ interaction(aa1[, 2], aa1[, i], sep = "："), control = my_controls, data = aa1)
+    table_one <- summary(table_one, text = TRUE, na.rm=TRUE)
+    table1 <- as.data.frame(table_one$object)
+    table_one <- as.data.frame(table_one)
+    table_one[, 1] <- table1[, 6]
+    table_one$`检验方法` <- ""
+    table_one$`OR值` <- ""
+    table_one$`95%CI` <- ""
+    table_one$`统计量` <- ""
+    
+    table_two <- table_one[c(1,stringr::str_which(table_one[,1], paste("^", elements[1], sep = ""))),]
+    for (k in 2:length(elements)) {
+      table_two <-rbind(table_two,table_one[c(stringr::str_which(table_one[,1], paste("^", elements[k], sep = ""))),])
+    }
+    table_two <-rbind(table_two, table_one[nrow(table_one),])
+    gongshi <- paste(names(aa1)[c(i,1,2)], collapse = "+")
+    gongshi1 <- as.formula(paste("~", gongshi))
+    table2 <- xtabs(gongshi1, data=aa1)
+    test <- mantelhaen.test(table2)
+    if(nrow(as.data.frame(table(aa1[, i]))) == 2 & length(unique(aa1[, 1])) == 2){
+      table_two$`检验方法`[1] <- "校正MH卡方检验" #test$method:	Mantel-Haenszel chi-squared test with continuity correction
+      table_two$`OR值`[1] <- sprintf("%.3f", test$estimate)  #公共优势比
+      table_two$`95%CI`[1] <- paste("(", round(test$conf.int[1], 3), ",", round(test$conf.int[2], 3), ")")
+      table_two$`统计量`[1] <- paste("X-squared =", sprintf("%.3f", test$statistic))
+      table_two$`p value`[1] <- sprintf("%.3f", test$p.value)
+      
+      test_OR <- DescTools::BreslowDayTest(table2) #或者WoolfTest
+      table_two[nrow(table_two)+1,] <- ""
+      table_two[nrow(table_two), c(1,2)] <- c("优势比齐次性检验P值", sprintf("%.3f", test_OR$p.value))
+      if(test_OR$p.value > 0.999){
+        table_two[nrow(table_two), 2] <- "> 0.999"
+      }else if(test_OR$p.value < 0.001){
+        table_two[nrow(table_two), 2] <- "< 0.001"
+      }
+      table_two <- table_two[c(1:(nrow(table_two)-2),nrow(table_two),nrow(table_two)-1),]
+    }else{
+      table_two$`检验方法`[1] <- "CMH检验" #Cochran-Mantel-Haenszel test
+      table_two$`统计量`[1] <- paste("M^2 =", sprintf("%.3f", test$statistic))
+      table_two$`p value`[1] <- sprintf("%.3f", test$p.value)
+    }
+    table_two[1,1] <- paste("interaction", "(", names(aa1)[2],"," ,names(aa1)[i], ")")
+    if(i==3)
+      table_three <- table_two
+    else
+      table_three <- rbind(table_three, table_two)
+  }
+  names(table_three)[names(table_three) == "p value"] <- "P值"
+  names(table_three)[1] <- "变量"
+  table_three <- table_three[, c(1:(ncol(table_three)-5), (ncol(table_three)-3):ncol(table_three), (ncol(table_three)-4))]
+  
+  if(all(table_three$`95%CI` == ""))
+    table_three <- table_three[, -which(names(table_three) == "95%CI")]
+  if(all(table_three$`OR值` == ""))
+    table_three <- table_three[, -which(names(table_three) == "OR值")]
+  
+  for (i in 1:nrow(table_three)) {
+    if(table_three$`P值`[i] == "1.000")
+      table_three$`P值`[i] <- "> 0.999"
+    else if(table_three$`P值`[i] == "0.000")
+      table_three$`P值`[i] <- "< 0.001"
+  }
+  output1(table_three)
+}
+```
+
+```{r}
+#函数说明：分类变量调整（分层）的组间比较。事后分析groupwiseCMH函数
+
+##函数使用说明：1、分类变量调整的组间比较，数据第一列为组别，调整（分层）变量放在第二列，比较变量放在后面；2、对于2×2×k表格，2×2存在优势比，所以需要将组别和该变量的使用factor函数进行调整顺序，保证OR值的正确。
+
+##输出结果说明：1、2×2的优势比（OR值）是公共优势比，如果优势比齐次性检验P值>0.05，可认为每层的优势比之间是没有差异的，则公共优势比是有意义的；反之亦然；置信区间同理。
+
+###待解决问题：1.连续校正的问题？2.另一个问题是，怎样对存在有序变量进行检验？存在三种情况：分层变量是有序的；比较变量是有序的；分层和比较变量都是有序的。生存分析的中心效应分析方法一样吗？3.如果变量有3个元素，但是只存在其中两个元素，这样给出的OR值以及检验方法是否合理？查一下两种统计量是否一致。4.如果某一个分层中其中一组全为0，能否进比较？(或者某一个分类为0) 。和SPSS进行比较
+
+Adjust_group2 <- function(aa1){
+  my_controls <- tableby.control(
+        test = TRUE, total = TRUE,
+        numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+        cat.stats = c("countpct", "Nmiss2"),
+        stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                            range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2)
+  elements <- unique(aa1[!is.na(aa1[, 2]), 2]) #分层个数
+  for (i in 3:ncol(aa1)) {
+    table_one <- tableby(aa1[, 1] ~ interaction(aa1[, 2], aa1[, i], sep = "："), control = my_controls, data = aa1)
+    table_one <- summary(table_one, text = TRUE, na.rm=TRUE)
+    table1 <- as.data.frame(table_one$object)
+    table_one <- as.data.frame(table_one)
+    table_one[, 1] <- table1[, 6]
+    table_one$`检验方法` <- ""
+    table_one$`OR值` <- ""
+    table_one$`95%CI` <- ""
+    table_one$`统计量` <- ""
+    #table_one <- table_one[table_one[, stringr::str_which(names(table_one), "^Total")] != "0 (0.0%)",] #把全为0的行去掉
+    
+    elements_leng <- vector(mode = "numeric", length = length(elements)) #计算每个层次变量个数
+    for (k in 1:length(elements)) { #将同一层次的描述放在一起
+      if(k==1){
+        table_two <- table_one[c(1,stringr::str_which(table_one[,1], paste("^", elements[k], sep = ""))),]
+      }else if(k!=1 & k!=length(elements)){
+        table_two <-rbind(table_two,table_one[c(stringr::str_which(table_one[,1], paste("^", elements[k], sep = ""))),])
+      }else{
+        table_two <-rbind(table_two,table_one[c(stringr::str_which(table_one[,1], paste("^", elements[k], sep = ""))
+                                                ,nrow(table_one)),])
+      }
+      elements_leng[k] <- length(stringr::str_which(table_one[,1], paste("^", elements[k], sep = "")))
+    }
+    gongshi <- paste(names(aa1)[c(i,1,2)], collapse = "+")
+    gongshi1 <- as.formula(paste("~", gongshi))
+    table2 <- xtabs(gongshi1, data=aa1)
+    if(all(elements_leng >= 2)){
+      test <- mantelhaen.test(table2)  #改检验对样本量是否有要求
+      if(all(elements_leng == 2) & length(unique(aa1[, 1])) == 2){
+        test_OR <- DescTools::WoolfTest(table2) #或者BreslowDayTest
+        table_two[nrow(table_two)+1,] <- ""
+        table_two[nrow(table_two), c(1,2)] <- c("优势比齐次性检验P值", sprintf("%.3f", test_OR$p.value))
+        if(test_OR$p.value > 0.999){
+          table_two[nrow(table_two), 2] <- "> 0.999"
+        }else if(test_OR$p.value < 0.001){
+          table_two[nrow(table_two), 2] <- "< 0.001"
+        }
+        table_two <- table_two[c(1:(nrow(table_two)-2),nrow(table_two),nrow(table_two)-1),]
+        if(test_OR$p.value > 0.05){ #选择进行MH检验还是fish检验（卡方）
+          table_two$`检验方法`[1] <- "校正MH卡方检验" #test$method:	Mantel-Haenszel chi-squared test with continuity correction
+          table_two$`OR值`[1] <- sprintf("%.3f", test$estimate)  #公共优势比
+          table_two$`95%CI`[1] <- paste("(", round(test$conf.int[1], 3), ",", round(test$conf.int[2], 3), ")")
+          table_two$`统计量`[1] <- paste("X-squared =", sprintf("%.3f", test$statistic))
+          table_two$`p value`[1] <- sprintf("%.3f", test$p.value)
+        }else{
+          for(j in 1:length(elements)){
+            num <- stringr::str_which(table_two[,1], paste("^", elements[j], sep = ""))[1] #选择每层所在的第一行
+            test1 <- fisher.test(as.matrix(table2)[,,j])  #只用fish检验吗？
+            table_two$`检验方法`[num] <- "Fisher's Exact Test" # for Count Data
+            table_two$`OR值`[num] <- sprintf("%.3f", test1$estimate)
+            table_two$`95%CI`[num] <- paste("(", round(test1$conf.int[1], 3), ",", round(test1$conf.int[2], 3), ")")
+            table_two$`p value`[num] <- sprintf("%.3f", test1$p.value)
+          }
+          table_two$`p value`[1] <- ""
+        }
+      }else{
+        table_two$`检验方法`[1] <- "CMH检验" #Cochran-Mantel-Haenszel test
+        table_two$`统计量`[1] <- paste("M^2 =", sprintf("%.3f", test$statistic))
+        table_two$`p value`[1] <- sprintf("%.3f", test$p.value)
+      }
+    }else{
+      for(j in 1:length(elements)){
+        num <- stringr::str_which(table_two[,1], paste("^", elements[j], sep = ""))[1] #选择每层所在的第一行
+        if(elements_leng[j] == 2){
+          test1 <- fisher.test(as.matrix(table2)[,,j])  #只用fish检验吗？
+          table_two$`检验方法`[num] <- "Fisher's Exact Test" # for Count Data
+          table_two$`OR值`[num] <- sprintf("%.3f", test1$estimate)
+          table_two$`95%CI`[num] <- paste("(", round(test1$conf.int[1], 3), ",", round(test1$conf.int[2], 3), ")")
+          table_two$`p value`[num] <- sprintf("%.3f", test1$p.value)
+        }else{
+          table_two$`检验方法`[num] <- "-"
+          table_two$`OR值`[num] <- "-"
+          table_two$`95%CI`[num] <- "-"
+          table_two$`p value`[num] <- "-"
+        }
+      }
+      table_two$`p value`[1] <- ""
+    }
+    table_two[1,1] <- paste("interaction", "(", names(aa1)[2],"," ,names(aa1)[i], ")")
+    if(i==3)
+      table_three <- table_two
+    else
+      table_three <- rbind(table_three, table_two)
+  }
+  names(table_three)[names(table_three) == "p value"] <- "P值"
+  names(table_three)[1] <- "变量"
+  table_three <- table_three[, c(1:(ncol(table_three)-5), (ncol(table_three)-3):ncol(table_three), (ncol(table_three)-4))]
+  
+  if(all(table_three$`95%CI` == ""))
+    table_three <- table_three[, -which(names(table_three) == "95%CI")]
+  if(all(table_three$`OR值` == ""))
+    table_three <- table_three[, -which(names(table_three) == "OR值")]
+  if(all(table_three$`统计量` == ""))
+    table_three <- table_three[, -which(names(table_three) == "统计量")]
+  
+  for (i in 1:nrow(table_three)) {
+    if(table_three$`P值`[i] == "1.000")
+      table_three$`P值`[i] <- "> 0.999"
+    else if(table_three$`P值`[i] == "0.000")
+      table_three$`P值`[i] <- "< 0.001"
+  }
+  output1(table_three)
+}
+```
+
+```{r}
+#原始的非参检验的多重比较
+##两两比较
+library(PMCMR)
+Compare_Dunn_two <- function(aa1){
+  group_name <- names(aa1)[1]
+  names(aa1)[1] <- "group"
+  for (k in 2:ncol(aa1)) {
+    variable_name <- names(aa1)[k]
+    aa1[, c(1,k)]$group <- as.factor(aa1[, c(1,k)]$group)
+    names(aa1)[c(1,k)] <- gsub("-", "_", names(aa1)[c(1,k)])
+    names(aa1)[c(1,k)] <- gsub("/", "_", names(aa1)[c(1,k)])
+    names(aa1)[c(1,k)] <- gsub(" ", "", names(aa1)[c(1,k)])
+    names(aa1)[c(1,k)] <- gsub("\\(", "", names(aa1)[c(1,k)])
+    names(aa1)[c(1,k)] <- gsub("\\)", "", names(aa1)[c(1,k)])
+    names(aa1)[c(1,k)] <- gsub("（", "", names(aa1)[c(1,k)])
+    names(aa1)[c(1,k)] <- gsub("）", "", names(aa1)[c(1,k)])
+    gongshi <- as.formula(paste(names(aa1)[k], "~", names(aa1)[1]))
+    tes <- posthoc.kruskal.dunn.test(gongshi, data = aa1, p.adjust="bonf")
+    Statistic <- as.data.frame(tes$statistic)
+    p_value <- as.data.frame(tes$p.value)
+    for (j in 1:ncol(p_value)) {
+      tabl <- as.data.frame(matrix(data = NA, nrow = (ncol(p_value)-(j-1)), ncol = 3))
+      for (i in j:nrow(p_value)) {
+        tabl[i-(j-1), 1] <- paste(names(p_value)[j], "-", rownames(p_value)[i])
+        tabl[i-(j-1), 2] <- Statistic[i, j]
+        tabl[i-(j-1), 3] <- p_value[i, j]
+      }
+      if(j==1)
+        tabl1 <- tabl
+      else
+        tabl1 <- rbind(tabl1, tabl)
+    }
+    tabl1[, 2:3] <- lapply(tabl1[, 2:3], as.numeric)
+    tabl1[, 2:3] <- round(tabl1[, 2:3], 3)
+    names(tabl1) <- c(group_name, "统计量", "P值")
+    tabl1$`变量` <- ""
+    tabl1$`变量`[1] <- variable_name
+    tabl1 <- tabl1[, c(ncol(tabl1), 1:ncol(tabl1)-1)]
+    if(k==2)
+      tabl2 <- tabl1
+    else
+      tabl2 <- rbind(tabl2, tabl1)
+  }
+  for (i in 1:nrow(tabl2)) {
+    if(tabl2$`P值`[i] > 0.999){
+      tabl2$`P值`[i] <- "> 0.999"
+    }else if(tabl2$`P值`[i] < 0.001){
+      tabl2$`P值`[i] <- "< 0.001"
+    }
+  }
+  output1(tabl2)
+}
+
+
+##与对照组的比较，与对照组进行比较（需要将对照组的顺序用factor函数调节到第一位）
+Compare_Dunn_control <- function(aa2){
+  group_name <- names(aa2)[1]
+  names(aa2)[1] <- "group"
+  aa2$group <- as.factor(aa2$group)
+  for (i in 2:ncol(aa2)) {
+    variable_name <- names(aa2)[i]
+    aa21 <- aa2[,1]
+    aa22 <- aa2[,i]
+    a1 <- PMCMR::dunn.test.control(aa22, aa21, p.adjust.method = "bonferroni")
+    a2 <- cbind.data.frame(a1$statistic, a1$p.value)
+    rownames(a2) <- paste(rownames(a2), "-", colnames(a2)[1])
+    a2$zubie <- rownames(a2)
+    colnames(a2) <- c("统计量/q值", "P值", group_name)
+    a2$`变量` <- ""
+    a2$`变量`[1] <- variable_name
+    a2 <- a2[, c(4,3,1,2)]
+    a2[, 3:4] <- round(a2[, 3:4], 3)
+    if(i==2)
+      a3 <- a2
+    else
+      a3 <- rbind(a3, a2)
+  }
+  for (i in 1:nrow(a3)) {
+    if(a3$`P值`[i] > 0.999){
+      a3$`P值`[i] <- "> 0.999"
+    }else if(a3$`P值`[i] < 0.001){
+      a3$`P值`[i] <- "< 0.001"
+    }
+  }
+  output1(a3)
+}
+```
+
+```{r}
+#显著变量的非参多重比较（包括两两比较和与对照组的比较）(加参数进行选择)
+Compare_Dunn <- function(aa1){
+  group_name <- names(aa1)[1]
+  names(aa1)[1] <- "group"
+  table_one <- tableby(group ~., data = aa1)
+  table_one <- summary(table_one, text = TRUE, na.rm=TRUE)
+  table1 <- as.data.frame(table_one$object)
+  data_type <- table1[table1[, 8] == "", 7]
+  aa3 <- as.data.frame(aa1[, 1])
+  colnames(aa3) <- "group"
+  for (i in 2:ncol(aa1)) {
+    if(data_type[i-1] == "numeric"){
+      aa3 <- cbind(aa3,as.data.frame(aa1[, i]))
+      colnames(aa3)[ncol(aa3)] <- colnames(aa1)[i]
+    }
+  }
+  group_type <- unique(aa3$group)
+  c1 <- vector(mode = "numeric", length = length(group_type))
+  guodu <- vector(mode = "numeric", length = length(group_type))
+  guodu1 <- vector(mode = "numeric", length = length(group_type))
+
+  for (i in 2:ncol(aa3)) {
+    sums <- length(aa3[, i])
+    for (l in 1:length(group_type)) {
+      cc <- subset(aa3, aa3$group == group_type[l])
+      guodu[l] <- sum(!is.na(unique(cc[, i])))#组内变量取值的水平个数
+      guodu1[l] <- sum(!is.na(cc[, i]))#组内变量样本数
+      if(guodu1[l] == 0){
+        c1[l] <- 0
+      }else if(guodu[l] >= 2 & guodu1[l] > 3){
+        c1[l] <- shapiro.test(cc[, i])$p.value
+      }else if(guodu1[l] <= 3 &  sums >= 4){
+        c1[l] <- 0
+      }
+    }
+    dd <- aa3[, c(1,i)]  #为不改变变量的名称（方差齐次性检验是否正确需确认）
+    dd$group <- as.factor(dd$group)
+    names(dd) <- gsub("-", "_", names(dd))
+    names(dd) <- gsub("/", "_", names(dd))
+    names(dd) <- gsub(" ", "", names(dd))
+    names(dd) <- gsub("\\(", "", names(dd))
+    names(dd) <- gsub("\\)", "", names(dd))
+    names(dd) <- gsub("（", "", names(dd))
+    names(dd) <- gsub("）", "", names(dd))
+    gongshi1 <- as.formula(paste(names(dd)[2], "~", names(dd)[1]))
+    if(all(c1 > 0.05) & car::leveneTest(gongshi1, data = dd)$`Pr(>F)`[1] > 0.05)
+      a <- "anova"
+    else
+      a <- "kwt"
+      
+    my_controls <- tableby.control(
+        test = TRUE, total = TRUE,
+        numeric.test = a, cat.test = "chisq",#####如何选择a b
+        numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+        cat.stats = c("countpct", "Nmiss2"),
+        stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                             range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2)#simulate.p.value = TRUE
+    table_two <- tableby(group ~.,control = my_controls, data = aa3[, c(1,i)])
+    table_two <- summary(table_two, text = TRUE, na.rm=TRUE)
+    table2 <- as.data.frame(table_two$object)#####对象是？
+    table_two <- as.data.frame(table_two)
+    table_two[, c(1,ncol(table_two)+1)] <- table2[, c("group.label","group.test")]
+    table_two[table_two$`p value` == "", ncol(table_two)] <- ""
+    table_two <- table_two[, c(1:(ncol(table_two)-2),
+                               ncol(table_two),ncol(table_two)-1)]
+    if(i==2){
+      table_three <- table_two
+    }else
+      table_three <- rbind(table_three,table_two)       
+  }
+  table_three$`p value` <- as.numeric(table_three$`p value`)
+  aa4 <- as.data.frame(aa3[, 1])
+  colnames(aa4) <- group_name
+  for (j in 2:ncol(aa3)) {
+    if(table_three$`group.test`[5*(j-1)-4] == "Kruskal-Wallis rank sum test"
+        & (table_three$`p value`[5*(j-1)-4] < 0.05 | is.na(table_three$`p value`[5*(j-1)-4]))){
+      aa4 <- cbind(aa4,as.data.frame(aa3[, j]))
+      colnames(aa4)[ncol(aa4)] <- colnames(aa3)[j]
+      }
+  }
+  if(ncol(aa4) >= 2){
+    #Compare_Dunn_control(aa4) #与对照组进行比较（需要将对照组的顺序用factor函数调节到第一位）
+    Compare_Dunn_two(aa4) #两两比较
+  }else{
+  print("没有需做多重比较的变量")
+  }
+}
+```
+
+```{r}
+#正态分布变量的多重检验
+##多个试验组与一个对照组的比较
+library(multcomp)
+Compare_control <- function(aa1){
+  group_name <- names(aa1)[1]  #组别的名称
+  names(aa1)[1] <- "group"
+  for (i in 2:ncol(aa1)) {
+    variable_name <- names(aa1)[i] #变量名称
+    aa1[, c(1,i)]$group <- as.factor(aa1[, c(1,i)]$group)
+    names(aa1)[c(1,i)] <- gsub("-", "_", names(aa1)[c(1,i)])
+    names(aa1)[c(1,i)] <- gsub("/", "_", names(aa1)[c(1,i)])
+    names(aa1)[c(1,i)] <- gsub(" ", "", names(aa1)[c(1,i)])
+    names(aa1)[c(1,i)] <- gsub("\\(", "", names(aa1)[c(1,i)])
+    names(aa1)[c(1,i)] <- gsub("\\)", "", names(aa1)[c(1,i)])
+    names(aa1)[c(1,i)] <- gsub("（", "", names(aa1)[c(1,i)])
+    names(aa1)[c(1,i)] <- gsub("）", "", names(aa1)[c(1,i)])
+    gongshi <- as.formula(paste(names(aa1)[i], "~", names(aa1)[1]))
+    model <- aov(gongshi, data = aa1[, c(1,i)])
+    rht <- multcomp::glht(model, linfct = mcp(group = 'Dunnett'), alternative = 'two.side')
+    y <- summary(rht)
+    a1 <- as.matrix(y$test)
+    a3 <- confint(y)
+    a2 <- as.data.frame(cbind(a1[[4]], a1[[5]], a1[[6]], a3$confint))
+    a2$group <- rownames(a2)
+    colnames(a2)[c(1:3,5:7)] <- c("标准差", "统计量/t值", "P值", "置信区间下限", "置信区间上限", group_name)
+    a2 <- a2[, c(7,4,1:2,5,6,3)]
+    a2[, 2:7] <- round(a2[, 2:7], 3)
+    a2$`变量` <- ""
+    a2$`变量`[1] <- variable_name
+    a2 <- a2[,c(ncol(a2),1:ncol(a2)-1)]
+    if(i==2)
+      a21 <- a2
+    else
+      a21 <- rbind(a21, a2)
+  }
+  for (i in 1:nrow(a21)) {
+    if(a21$`P值`[i] > 0.999){
+      a21$`P值`[i] <- "> 0.999"
+    }else if(a21$`P值`[i] < 0.001){
+      a21$`P值`[i] <- "< 0.001"
+    }
+  }
+    output1(a21)
+}
+
+##两两比较
+Compare_two <- function(aa1){
+  group_name <- names(aa1)[1]
+  names(aa1)[1] <- "group"
+  aa1$group <- as.factor(aa1$group)
+  for (i in 2:ncol(aa1)) {
+    variable_name <- names(aa1)[i]
+#    aa1[, c(1,i)]$group <- as.factor(aa1[, c(1,i)]$group)
+    names(aa1)[c(1,i)] <- gsub("-", "_", names(aa1)[c(1,i)])
+    names(aa1)[c(1,i)] <- gsub("/", "_", names(aa1)[c(1,i)])
+    names(aa1)[c(1,i)] <- gsub(" ", "", names(aa1)[c(1,i)])
+    names(aa1)[c(1,i)] <- gsub("\\(", "", names(aa1)[c(1,i)])
+    names(aa1)[c(1,i)] <- gsub("\\)", "", names(aa1)[c(1,i)])
+    names(aa1)[c(1,i)] <- gsub("（", "", names(aa1)[c(1,i)])
+    names(aa1)[c(1,i)] <- gsub("）", "", names(aa1)[c(1,i)])
+    gongshi <- as.formula(paste(names(aa1)[i], "~", names(aa1)[1]))
+    model <- aov(gongshi, data = aa1[, c(1,i)])
+    rht <- TukeyHSD(model, ordered = TRUE) #glht也可以
+    shuchu <- as.data.frame(rht$group)
+    shuchu$group <- rownames(shuchu)
+    shuchu$`变量` <- ""
+    shuchu$`变量`[1] <- variable_name
+    colnames(shuchu) <- c("差值", "置信区间下限","置信区间上限", "P值", group_name, "变量")
+    shuchu <- shuchu[, c(6,5,1:4)]
+    shuchu[, 3:6] <- round(shuchu[, 3:6], 3)
+    if(i==2)
+      shuchu1 <- shuchu
+    else
+      shuchu1 <- rbind(shuchu1, shuchu)
+  }
+  for (i in 1:nrow(shuchu1)) {
+    if(shuchu1$`P值`[i] > 0.999){
+      shuchu1$`P值`[i] <- "> 0.999"
+    }else if(shuchu1$`P值`[i] < 0.001){
+      shuchu1$`P值`[i] <- "< 0.001"
+    }
+  }
+  output1(shuchu1)
+}
+```
+
+```{r}
+#选择需进行多重比较(方差分析显著性变量)的变量
+Choose_ANOVA <- function(aa1){
+  group_name <- names(aa1)[1]
+  names(aa1)[1] <- "group"
+  table_one <- tableby(group ~., data = aa1)
+  table_one <- summary(table_one, text = TRUE, na.rm=TRUE)
+  table1 <- as.data.frame(table_one$object)
+  data_type <- table1[table1[, 8] == "", 7]
+  aa3 <- as.data.frame(aa1[, 1])
+  colnames(aa3) <- "group"
+  for (i in 2:ncol(aa1)) {
+    if(data_type[i-1] == "numeric"){
+      aa3 <- cbind(aa3,as.data.frame(aa1[, i]))
+      colnames(aa3)[ncol(aa3)] <- colnames(aa1)[i]
+    }
+  }
+  group_type <- unique(aa3$group)
+  c1 <- vector(mode = "numeric", length = length(group_type))
+  guodu <- vector(mode = "numeric", length = length(group_type))
+  guodu1 <- vector(mode = "numeric", length = length(group_type))
+
+  for (i in 2:ncol(aa3)) {
+    sums <- length(aa3[, i+1])
+    for (l in 1:length(group_type)) {
+    cc <- subset(aa3, aa3$group == group_type[l])
+    guodu[l] <- sum(!is.na(unique(cc[, i+1])))#组内变量取值的水平个数
+    guodu1[l] <- sum(!is.na(cc[, i+1]))#组内变量样本数
+    if(guodu1[l] == 0){
+      c1[l] <- 0
+    }else if(guodu[l] >= 2 & guodu1[l] > 3){
+      c1[l] <- shapiro.test(cc[, i+1])$p.value
+    }else if(guodu1[l] <= 3 &  sums >= 4){
+      c1[l] <- 0
+    }
+    }
+    dd <- aa3[, c(1,i)]  #为不改变变量的名称(需确认)
+    dd$group <- as.factor(dd$group)
+    names(dd) <- gsub("-", "_", names(dd))
+    names(dd) <- gsub("/", "_", names(dd))
+    names(dd) <- gsub(" ", "", names(dd))
+    names(dd) <- gsub("\\(", "", names(dd))
+    names(dd) <- gsub("\\)", "", names(dd))
+    names(dd) <- gsub("（", "", names(dd))
+    names(dd) <- gsub("）", "", names(dd))
+    gongshi1 <- as.formula(paste(names(dd)[2], "~", names(dd)[1]))
+    if(all(c1 > 0.05) & car::leveneTest(gongshi1, data = dd)$`Pr(>F)`[1] > 0.05)
+      a <- "anova"
+    else
+      a <- "kwt"
+      
+    my_controls <- tableby.control(
+        test = TRUE, total = TRUE,
+        numeric.test = a, cat.test = "chisq",#####如何选择a b
+        numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+        cat.stats = c("countpct", "Nmiss2"),
+        stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                             range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2)
+        
+    table_two <- tableby(group ~.,control = my_controls, data = aa3[, c(1,i)])
+    table_two <- summary(table_two, text = TRUE, na.rm=TRUE)
+    table2 <- as.data.frame(table_two$object)#####对象是？
+    table_two <- as.data.frame(table_two)
+    table_two[, c(1,ncol(table_two)+1)] <- table2[, c("group.label","group.test")]
+    table_two[table_two$`p value` == "", ncol(table_two)] <- ""
+    table_two <- table_two[, c(1:(ncol(table_two)-2),
+                                ncol(table_two),ncol(table_two)-1)]
+    if(i==2){
+      table_three <- table_two
+    }else
+      table_three <- rbind(table_three,table_two)
+  }
+  table_three$`p value` <- as.numeric(table_three$`p value`)
+  aa4 <- as.data.frame(aa3[, 1])
+  colnames(aa4) <- group_name
+  for (j in 2:ncol(aa3)) {
+    if(table_three$`group.test`[5*(j-1)-4] == "Linear Model ANOVA"
+        & (table_three$`p value`[5*(j-1)-4] < 0.05 | is.na(table_three$`p value`[5*(j-1)-4]))){
+      aa4 <- cbind(aa4,as.data.frame(aa3[, j]))
+      colnames(aa4)[ncol(aa4)] <- colnames(aa3)[j]
+    }
+  }
+  aa4
+}
+```
+
+```{r}
+#分类数据的多重比较？？？需要确认
+Compare2 <- function(b1){
+  shuchu <- posthoc.kruskal.nemenyi.test(x=b1[, 2], g=b1$group, dist="Tukey")
+  qw1 <- as.data.frame(shuchu$p.value)
+  qw1$group <- rownames(qw1)
+  qw1 <- qw1[, c(ncol(qw1), 1:ncol(qw1)-1)]
+  qw1[, 2:ncol(qw1)] <- round(qw1[, 2:ncol(qw1)], 3)
+  output1(qw1)
+}
+```
+
+```{r}
+#分类变量的选择
+Choose_cate <- function(aa1){
+  group_name <- names(aa1)[1]
+  names(aa1)[1] <- "group"
+  table_one <- tableby(group ~., data = aa1)
+  table_one <- summary(table_one, text = TRUE, na.rm=TRUE)
+  table1 <- as.data.frame(table_one$object)
+  data_type <- table1[table1[, 8] == "", 7]
+  aa2 <- as.data.frame(aa1[, 1])
+  colnames(aa2) <- group_name
+  for (i in 1:length(data_type)) {
+      if(data_type[i] == "categorical"){
+            aa2 <- cbind(aa2,as.data.frame(aa1[, i+1]))
+            colnames(aa2)[ncol(aa2)] <- colnames(aa1)[i+1]
+      }
+  }
+  aa2
+}
+```
+
+```{r}
+#分类变量的选择(显著性变量)，选择所有分类变量中差异有统计学意义的变量
+Choose_cate_signif <- function(aa1){
+  group_name <- names(aa1)[1]
+  names(aa1)[1] <- "group"
+  table_one <- tableby(group ~., data = aa1)
+  table_one <- summary(table_one, text = TRUE, na.rm=TRUE)
+  table1 <- as.data.frame(table_one$object)
+  data_type <- table1[table1[, 8] == "", 7]
+  group_type <- unique(aa1$group)
+
+  for (i in 1:length(data_type)) {
+      if(data_type[i] == "categorical"){
+                    bb1 <- tableby(group ~., data = aa1[, c(1,i+1)])
+          bb1 <- summary(bb1, text = TRUE, na.rm=TRUE)
+          bb1 <- as.data.frame(bb1)
+          if(sum(is.na(aa1[, c(i+1)])) == 0)
+            bb1 <- bb1[-1, -c(1,ncol(bb1))] 
+          else
+            bb1 <- bb1[-c(1,2), -c(1,ncol(bb1))] 
+          #如果分类变量存在缺失第一行和第二行都去掉（名称和缺失）
+          for (j in 1:ncol(bb1)) {
+            bb1[, j] <- gsub("\\(.*\\)","",bb1[, j])
+            bb1[, j] <- as.numeric(bb1[, j])
+          }
+          bb1[nrow(bb1)+1,] <- colSums(bb1[, 1:ncol(bb1)])
+          bb1 <- bb1[, c(ncol(bb1),1:(ncol(bb1)-1))]
+          
+          if(nrow(bb1) > 2){
+          ##a1是计算期望频数
+            a1 <- matrix(nrow = nrow(bb1)-1, ncol = ncol(bb1)-1)
+            for (k in 1:(nrow(bb1)-1)) {
+                for (j in 1:(ncol(bb1)-1)) {
+                  a1[k ,j] <- (bb1[k, 1]*bb1[nrow(bb1), j+1])/bb1[nrow(bb1), 1]
+                }
+            }
+
+            if((nrow(a1) == 2 & ncol(a1) == 2) & ((bb1[nrow(bb1),1] < 40 | any(a1 < 1) == TRUE) | (bb1[nrow(bb1),1] >= 40 & any(a1 < 5 & a1 >= 1) == TRUE))){
+              b <- "fe"
+            }else if((nrow(a1) > 2 | ncol(a1) > 2) & (nrow(a1) != 2 & ncol(a1) != 2) & (any(a1 < 1) == TRUE | length(which(a1 < 5 & a1 >= 1)) > ((nrow(bb1)-1)*(ncol(bb1)-1))/5)){
+              b <- "fe"
+            }else{
+              b <- "chisq"
+            }
+          }else{
+            b <- "chisq"
+          }
+      }else{
+         b <- "chisq"
+      }
+        
+        my_controls <- tableby.control(
+        test = TRUE, total = TRUE,
+        numeric.test = "anova", cat.test = b,#####如何选择a b
+        numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+        cat.stats = c("countpct", "Nmiss2"),
+        stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                             range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2)#simulate.p.value = TRUE
+        table_two <- tableby(group ~.,control = my_controls, data = aa1[, c(1,i+1)])
+        table_two <- summary(table_two, text = TRUE, na.rm=TRUE)
+        table2 <- as.data.frame(table_two$object)#####对象是？
+        table_two <- as.data.frame(table_two)
+        table_two[, c(1,ncol(table_two)+1)] <- table2[, c("group.label","group.test")]
+        table_two[table_two$`p value` == "", ncol(table_two)] <- ""
+        table_two <- table_two[, c(1:(ncol(table_two)-2),
+                                   ncol(table_two),ncol(table_two)-1)]
+        if(data_type[i] == "categorical"){
+          if(nrow(bb1) <= 2){
+            if(bbb$p.value < 0.001)
+              table_two$`p value`[1] <- "< 0.001"
+            if(bbb$p.value > 0.999)
+              table_two$`p value`[1] <- "> 0.999"
+            if(bbb$p.value >= 0.001 & bbb$p.value <= 0.999)
+              table_two$`p value`[1] <- round(bbb$p.value, 3)
+          }
+        }
+        colnames(table_two)[1] <- "变量"
+        if(i==1){
+          table_three <- table_two
+        }else{
+          table_three <- rbind(table_three,table_two)
+        }
+  }
+        table_three$`p value` <- as.numeric(table_three$`p value`)
+        aa4 <- as.data.frame(aa3[, 1])
+        colnames(aa4) <- group_name
+        for (j in 2:ncol(aa3)) {
+          if((table_three$`group.test`[5*(j-1)-4] == "Pearson's Chi-squared test" | table_three$`group.test`[5*(j-1)-4] == "Fisher's Exact Test for Count Data")
+             & (table_three$`p value`[5*(j-1)-4] < 0.05 | is.na(table_three$`p value`[5*(j-1)-4]))){
+            aa4 <- cbind(aa4,as.data.frame(aa3[, j]))
+            colnames(aa4)[ncol(aa4)] <- colnames(aa3)[j]
+            }
+        }
+    aa4
+}
+```
+
+```{r}
+#函数描述：单因素cox回归；数据：第一列为生存时间，第二列为结局事件（一般为0,1向量），后面为影响因素。
+Cox_regression_one <- function(data_Cox){
+  time <- data_Cox[, 1]
+  status <- data_Cox[, 2]
+  for (j in 3:ncol(data_Cox)) {
+    trt <- data_Cox[, j]
+    cox <- coxph(Surv(time, status) ~ trt, data = data_Cox)
+    bbb <- summary(cox)
+    aaa <- as.data.frame(bbb$conf.int)
+    qwe <- as.data.frame(coef(summary(cox)))
+    qwe$group <- rownames(qwe)
+    qwe$group <- gsub("trt", "", qwe$group)
+    qwe[, 1:5] <- round(qwe[, 1:5], 3)
+    qwe$`exp(coef)` <- paste(qwe$`exp(coef)`,"(",round(aaa$`lower .95`,2),",", round(aaa$`upper .95`,2),")", sep = "")
+    qwe$`变量` <- ""
+    qwe$`变量`[1] <- names(data_Cox)[j]
+    qwe <- qwe[, c(ncol(qwe), ncol(qwe)-1, 1:(ncol(qwe)-2))]
+    colnames(qwe) <- c("变量","变量值","回归系数","HR值(95%CI)","标准误差","Z值","P值")
+    if(j == 3)
+      qwe1 <- qwe
+    else
+      qwe1 <- rbind(qwe1, qwe)
+  }
+  qwe1$`P值` <- as.character(qwe1$`P值`)
+  for (i in 1:nrow(qwe1)) {
+    if(!is.na(qwe1$`P值`[i]) & qwe1$`P值`[i] == "0")
+      qwe1$`P值`[i] <- "<0.001"
+  }
+  output1(qwe1)
+}
+```
+
+```{r}
+#二分类logistics回归
+Logit <- function(aa1){
+  aa1$group <- as.numeric(aa1$group)
+  glm1 <- glm(group ~ ., family = binomial(link = "logit"), data = aa1)
+  glm2 <- stepAIC(glm1, trace = F)
+  tab_glm2 <- summary(glm2)
+  tab_glm2 <- as.data.frame(tab_glm2$coefficients)
+  tab_glm2$`Pr(>|z|)` <- round(tab_glm2$`Pr(>|z|)`,3)
+  output1(tab_glm2)
+}
+
+```
+
+
+```{r}
+##哑变量处理函数(增加了出现缺失值的情况)
+dummy.variable  <- function(cl) {
+  n <- length(cl)
+  cl <- as.factor(cl)
+  x <- matrix( 0,  n ,  length(levels(cl)) )
+  # unclass 返回每个字符在level表中的位置
+  # 然后按照列计算在向量中的位置
+  x[n*(unclass(cl)-1) + (1:n)] <- 1
+  dimnames(x) <- list(names(cl), levels(cl))
+  aaa <- as.data.frame(x)
+  for (i in 1:nrow(aaa)) {
+    if(all(aaa[i, 1:ncol(aaa)] == 0)){
+      aaa[i, 1:ncol(aaa)] <- NA
+    }
+  }
+  aaa
+}
+```
+
+```{r}
+#函数说明：各个访视点与基线的组内前后比较（第一列必须是组别，基线为访视1，每个连续变量各访视点的数据必须按照顺序排列在一起，每个变量的访视点个数必须相同）(还需要增加正态性检验P值)
+Compare_continue_in <- function(bb3, h){  #最终版
+  group_name <- names(bb3)[1]
+  names(bb3)[1] <- "group"
+  for (m in 1:((ncol(bb3)-1)/h)) {
+    bb <- bb3[, c(1,(h*m-(h-2)):(h*m+1))]
+    for (j in 3:(h+1)) {
+      bb1 <- bb[, c(1,2,j)]
+#      b <- names(bb1)[3]
+      tabl0 <- tableby(group~., data = bb1)
+      tabl0 <- summary(tabl0, text = TRUE, na.rm=TRUE)
+      tabl0 <- as.data.frame(tabl0$object)
+      data_type <- tabl0[tabl0[, 8] == "", 7]
+         
+      for (i in 1:length(data_type)) {
+             my_controls1 <- tableby.control(
+             test = TRUE, total = TRUE,
+             numeric.test = "anova", cat.test = "chisq",
+             numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+             cat.stats = c("countpct", "Nmiss2"),
+             stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                             range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2
+             )
+             table_three1 <- tableby(group ~.,control = my_controls1, data = bb1[,c(1,i+1)])
+             table_three1 <- summary(table_three1, text = TRUE, na.rm=TRUE)
+             table3<- as.data.frame(table_three1$object)
+             table_three1 <- as.data.frame(table_three1)
+             table_three1[, c(1,ncol(table_three1)+1)] <- table3[, c(6,ncol(table3)-1)]
+             table_three1[table_three1$`p value` == "", ncol(table_three1)] <- ""
+             table_three1 <- table_three1[, c(1:(ncol(table_three1)-2),
+                                       ncol(table_three1),ncol(table_three1)-1)]
+              
+             table_three1 <- table_three1[, -c((ncol(table_three1)-2):ncol(table_three1))] 
+             if(i==1)
+               table_t1 <- table_three1
+             else
+               table_t1 <- rbind(table_t1, table_three1)
+      }
+
+      for (i in 2:ncol(table_t1)) {
+        table_t21 <- table_t1[, c(1,i)]
+        table_t21 <- cbind(table_t21[1:5, 1:2], table_t21[6:10, 2])
+        names(table_t21) <- c("组别", "基线", "结局")
+        table_t21$`组别`[1] <- names(table_t1)[i]
+        if(i==2)
+          table_t <- table_t21
+        else
+          table_t <- rbind(table_t, table_t21)
+      }
+      table_t$`变量` <- ""
+      table_t <- table_t[, c(4,1:3)]
+      table_t$`变量`[1] <- table_t1[6, 1]
+      table_t$`检验方法` <- ""
+      table_t$`95%CI` <- ""
+      table_t$`统计量` <- ""
+      table_t$`P值` <- ""
+      
+      uniq <- gsub(" \\(.*\\)","",names(table_t1)[2:ncol(table_t1)])
+      for (i in 1:length(uniq)) {
+        bb2 <- bb1[bb1$group == uniq[i],]
+        bb2$D <- as.numeric(bb2[, 2] - bb2[, 3])
+        
+        if(sum(!is.na(bb2$D)) >= 3 & ((sum(is.na(bb2$D)) == 0 & length(unique(bb2$D)) >= 2) | (sum(is.na(bb2$D)) != 0 & length(unique(bb2$D)) >= 3))){
+          if(shapiro.test(bb2$D)$p.value <= 0.05){
+            Method <- "Wilcoxon signed rank test"
+            tes <- wilcox.test(bb2[, 2], bb2[, 3], paired = TRUE, conf.int = TRUE)
+            Statistic <- paste("V =", round(tes$statistic, 3))
+          }else{
+            Method <- "Paired t-test"
+            tes <- t.test(bb2[, 2], bb2[, 3], paired = TRUE)  #是否需要同方差var.equal = TRUE
+            Statistic <- paste("T =", round(tes$statistic, 3))
+          }
+          table_t$`检验方法`[5*i-4] <- Method
+          table_t$`95%CI`[5*i-4] <- paste("(", round(tes$conf.int[1], 3), ",", round(tes$conf.int[2], 3), ")")
+          table_t$`统计量`[5*i-4] <- Statistic
+          table_t$`P值`[5*i-4] <- round(tes$p.value, 3)
+        }else{
+          table_t$`检验方法`[5*i-4] <- "-"
+          table_t$`95%CI`[5*i-4] <- "-"
+          table_t$`统计量`[5*i-4] <- "-"
+          table_t$`P值`[5*i-4] <- 1
+        }
+      }
+      
+      table_t[, c(2:ncol(table_t))] <- table_t[c(6:10,1:5), c(2:ncol(table_t))]  #临时添加代码(两组)调节组的位置
+      
+      if(j==3){
+          table_t2 <- table_t
+      }else
+          table_t2 <- rbind(table_t2,table_t)
+    }
+    if(m==1)
+      tabl <- table_t2
+    else
+      tabl <- rbind(tabl,table_t2)
+}
+  tabl$`P值` <- as.numeric(tabl$`P值`)
+  for (k in 1:nrow(tabl)) {
+    if(is.na(tabl$`P值`[k])){
+      tabl$`P值`[k] <- NA
+    }else if(tabl$`P值`[k] < 0.001){
+      tabl$`P值`[k] <- "< 0.001"
+    }else if(tabl$`P值`[k] > 0.999){
+      tabl$`P值`[k] <- "> 0.999"
+    }
+  }
+  names(tabl)[names(tabl) == "组别"] <- group_name
+  tabl$`变量` <- gsub("_结局", "", tabl$`变量`)
+  tabl$`变量` <- gsub("结局_", "", tabl$`变量`)
+  output1(tabl)
+}
+```
+
+```{r}
+#连续变量某访视点与基线间的比较（不分组）差值为正态分布的加上了置信区间(还需要增加正态性检验P值)
+Compare_continue_out <- function(bb3, h){
+  for (m in 1:(ncol(bb3)/h)) {
+    bb <- bb3[, c((h*m-(h-1)):(h*m))]
+    for (j in 2:ncol(bb)) {
+      bb1 <- bb[, c(1,j)]
+      variable_name <- names(bb1)[2]
+      tabl0 <- tableby(~., data = bb1)
+      tabl0 <- summary(tabl0, text = TRUE, na.rm=TRUE)
+      tabl0 <- as.data.frame(tabl0$object)
+      data_type <- tabl0[tabl0[, 8] == "", 7]
+         
+      for (i in 1:length(data_type)) {
+             my_controls1 <- tableby.control(
+             test = TRUE, total = TRUE,
+             numeric.test = "anova", cat.test = "chisq",
+             numeric.stats = c("meansd", "medianq1q3", "range", "Nmiss2"),
+             cat.stats = c("countpct", "Nmiss2"),
+             stats.labels = list(meansd = "Mean (SD)", medianq1q3 = "Median (Q1, Q3)",
+                             range = "Min - Max", Nmiss2 = "Missing"), digits = 2,digits.pct = 2
+             )
+             table_three1 <- tableby(~.,control = my_controls1, data = bb1[,c(1,i)])
+             table_three1 <- summary(table_three1, text = TRUE, na.rm=TRUE)
+             table3<- as.data.frame(table_three1$object)
+             table_three1 <- as.data.frame(table_three1)
+             table_three1[, 1] <- table3[, 6]
+      }     
+
+      table_t <- table_three1
+      table_t <- cbind(table_t[1:5, 1:2], table_t[6:10, 2])
+      names(table_t) <- c("组别", "基线", "结局")
+      table_t$`组别`[1] <- names(table_three1)[2]
+      table_t$`变量` <- ""
+      table_t$`变量`[1] <- variable_name
+      table_t <- table_t[, c(4,1:3)]
+      table_t$`检验方法` <- ""
+      table_t$`95%CI` <- ""
+      table_t$`统计量` <- ""
+      table_t$`P值` <- ""
+      
+      bb1$D <- as.numeric(bb1[, 2] - bb1[, 1])
+      if(sum(!is.na(bb1$D)) >= 3 & ((sum(is.na(bb1$D)) == 0 & length(unique(bb1$D)) >= 2) | (sum(is.na(bb1$D)) != 0 & length(unique(bb1$D)) >= 3))){
+        if(shapiro.test(bb1$D)$p.value <= 0.05){
+          Method <- "Wilcoxon signed rank test"
+          tes <- wilcox.test(bb1[, 1], bb1[, 2], paired = TRUE, conf.int = TRUE)
+          Statistic <- paste("V =", round(tes$statistic, 3))
+        }else{
+          Method <- "Paired t-test"
+          tes <- t.test(bb1[, 1], bb1[, 2], paired = TRUE) #, var.equal = TRUE
+          Statistic <- paste("T =", round(tes$statistic, 3))
+        }
+        table_t$`检验方法`[1] <- Method
+        table_t$`95%CI`[1] <- paste("(", round(tes$conf.int[1], 3), ",", round(tes$conf.int[2], 3), ")")
+        table_t$`统计量`[1] <- Statistic
+        table_t$`P值`[1] <- round(tes$p.value, 3)
+      }else{
+        table_t$`检验方法`[1] <- "-"
+        table_t$`95%CI`[1] <- "-"
+        table_t$`统计量`[1] <- "-"
+        table_t$`P值`[1] <- 1
+      }
+      
+      if(j==2){
+          table_t2 <- table_t
+      }else
+          table_t2 <- rbind(table_t2,table_t)
+    }
+    if(m==1)
+      tabl <- table_t2
+    else
+      tabl <- rbind(tabl,table_t2)
+}
+  tabl$`P值` <- as.numeric(tabl$`P值`)
+  for (k in 1:nrow(tabl)) {
+    if(is.na(tabl$`P值`[k])){
+      tabl$`P值`[k] <- NA
+    }else if(tabl$`P值`[k] < 0.001){
+      tabl$`P值`[k] <- "< 0.001"
+    }else if(tabl$`P值`[k] > 0.999){
+      tabl$`P值`[k] <- "> 0.999"
+    }
+  }
+  tabl$`变量` <- gsub("_结局", "", tabl$`变量`)
+  tabl$`变量` <- gsub("结局_", "", tabl$`变量`)
+  output1(tabl)
+}
+```
+
+```{r}
+#访视点间分类数据某访视点与基线的组内比较（是否需要加上样本数和缺失数）
+Compare_cate_in <- function(bb3, h){   #参数h为访视点个数
+  names(bb3)[1] <- "group"
+  bb1 <- unique(bb3$group)
+  for (i in 1:((ncol(bb3)-1)/h)) {
+    bb <- bb3[, c(1,(h*i-(h-2)):(h*i+1))]
+    for (j in 3:(h+1)) {
+      bb2 <- bb[, c(1,2,j)]
+      for (l in 1:length(bb1)) {
+        bb0 <- bb2[bb2$group == bb1[l],]
+        bb0$V5 <- bb0[, 2]
+        bb0$V6 <- bb0[, 3]
+        if(("是" %in% bb0$V5) | ("否" %in% bb0$V5)){
+          bb0$V5 <- factor(bb0$V5, levels = c("是", "否"), labels = c("是_基线", "否_基线"))
+          bb0$V6 <- factor(bb0$V6, levels = c("是", "否"), labels = c("是_结局", "否_结局"))
+        }else if(("有" %in% bb0$V5) | ("无" %in% bb0$V5)){
+          bb0$V5 <- factor(bb0$V5, levels = c("有", "无"), labels = c("有_基线", "无_基线"))
+          bb0$V6 <- factor(bb0$V6, levels = c("有", "无"), labels = c("有_结局", "无_结局"))
+        }else if(("高" %in% bb0$V5) | ("低" %in% bb0$V5) | ("正常" %in% bb0$V5)){
+          bb0$V5 <- factor(bb0$V5, levels = c("高", "低", "正常"), labels = c("高_基线", "低_基线", "正常_基线"))
+          bb0$V6 <- factor(bb0$V6, levels = c("高", "低", "正常"), labels = c("高_结局", "低_结局", "正常_结局"))
+        }else if(("轻型" %in% bb0$V5) | ("普通型" %in% bb0$V5) | ("重型" %in% bb0$V5)){
+          bb0$V5 <- factor(bb0$V5, levels = c("轻型", "普通型", "重型"), labels = c("轻型_基线", "普通型_基线", "重型_基线"))
+          bb0$V6 <- factor(bb0$V6, levels = c("轻型", "普通型", "重型"), labels = c("轻型_结局", "普通型_结局", "重型_结局"))
+        }else if(("1" %in% bb0$V5) | ("3" %in% bb0$V5) | ("4" %in% bb0$V5)){
+          bb0$V5 <- factor(bb0$V5, levels = c("1", "3", "4", "5"), labels = c("1_基线", "3_基线", "4_基线", "5_基线"))
+          bb0$V6 <- factor(bb0$V6, levels = c("1", "3", "4", "5"), labels = c("1_结局", "3_结局", "4_结局", "5_结局"))
+        }
+        tabl <- as.data.frame(as.matrix(xtabs(~bb0[, 4] + bb0[, 5], data = bb0)))
+        cc <- as.matrix(tabl)
+      if(nrow(cc) == 2){
+        b <- mcnemar.test(cc)
+        P <- b$p.value
+      }else{
+        b <- nominalSymmetryTest(cc, 
+                        method = "fdr", digits = 3,
+                        MonteCarlo = TRUE,
+                        ntrial     = 10000)
+        P <- b$Global.test.for.symmetry$p.value
+      }
+      tabl$v1  <- rownames(tabl)
+      tabl <- tabl[, c(ncol(tabl), 1:ncol(tabl)-1)]
+      tabl$`P-value` <- ""
+      tabl[1, ncol(tabl)] <- P
+      names(tabl)[1] <- "变量值"
+      tabl$`组别` <- ""
+      tabl$`组别`[1] <- bb1[l]
+      tabl <- tabl[, c(ncol(tabl), 1:ncol(tabl)-1)]
+      tabl$`P-value` <- as.numeric(tabl$`P-value`)
+      tabl$`P-value` <- round(tabl$`P-value`, 3)
+      for (k in 1:nrow(tabl)) {
+        if(is.na(tabl$`P-value`[k])){
+          tabl$`P-value`[k] <- NA
+        }else if(tabl$`P-value`[k] <= 0.001){
+          tabl$`P-value`[k] <- "< 0.001"
+        }else if(tabl$`P-value`[k] >= 0.999){
+          tabl$`P-value`[k] <- "> 0.999"
+        }
+      }
+      names(tabl)[ncol(tabl)] <- "P值"
+      if(l==1)
+        tabl1 <- tabl
+      else
+        tabl1 <- rbind(tabl1, tabl)
+      }
+      tabl1$`变量名` <- ""
+      tabl1$`变量名`[1] <- names(bb0)[3]
+      tabl1 <- tabl1[, c(ncol(tabl1), 1:ncol(tabl1)-1)]
+      if(j==3)
+        tabl2 <- tabl1
+      else
+        tabl2 <- rbind(tabl2, tabl1)
+    }
+    if(i==1)
+      tabl3 <- tabl2
+    else
+      tabl3 <- rbind(tabl3, tabl2)
+  }
+#  if(str_detect(tabl2$`变量名`[1], "-结局"))
+  tabl3$`变量名` <- gsub("-结局","",tabl3$`变量名`)
+  tabl3$`变量名` <- gsub("_结局","",tabl3$`变量名`)
+  tabl3$`变量名` <- gsub("结局_", "", tabl3$`变量名`)
+  output1(tabl3)
+}
+```
+
+```{r}
+#访视点间分类数据某访视点与基线的比较(未分组)（是否需要加上样本数和缺失数）
+Compare_cate_out <- function(bb1, h){     #参数h为访视点个数
+  for (k in 1:(ncol(bb1)/h)) {
+    bb <- bb1[, c((h*k-(h-1)):(h*k))]
+    for (j in 2:h) {
+      bb0 <- bb[, c(1,j)]
+      bb0$V5 <- bb0[, 1]
+      bb0$V6 <- bb0[, 2]
+      if(("是" %in% bb0$V5) | ("否" %in% bb0$V5)){
+        bb0$V5 <- factor(bb0$V5, levels = c("是", "否"), labels = c("是_基线", "否_基线"))
+        bb0$V6 <- factor(bb0$V6, levels = c("是", "否"), labels = c("是_结局", "否_结局"))
+      }else if(("有" %in% bb0$V5) | ("无" %in% bb0$V5)){
+        bb0$V5 <- factor(bb0$V5, levels = c("有", "无"), labels = c("有_基线", "无_基线"))
+        bb0$V6 <- factor(bb0$V6, levels = c("有", "无"), labels = c("有_结局", "无_结局"))
+      }else if(("高" %in% bb0$V5) | ("低" %in% bb0$V5) | ("正常" %in% bb0$V5)){
+        bb0$V5 <- factor(bb0$V5, levels = c("高", "低", "正常"), labels = c("高_基线", "低_基线", "正常_基线"))
+        bb0$V6 <- factor(bb0$V6, levels = c("高", "低", "正常"), labels = c("高_结局", "低_结局", "正常_结局"))
+      }
+      tabl <- as.data.frame(as.matrix(xtabs(~bb0[, 3] + bb0[, 4], data = bb0)))
+      cc <- as.matrix(tabl)
+      if(ncol(cc) == 2){
+        b <- mcnemar.test(cc)
+        P <- b$p.value
+      }else{
+        b <- nominalSymmetryTest(cc, 
+                       method = "fdr", digits = 3,
+                       MonteCarlo = TRUE,
+                       ntrial     = 10000)
+        P <- b$Global.test.for.symmetry$p.value
+      }
+      tabl$v1  <- rownames(tabl)
+      tabl <- tabl[, c(ncol(tabl), 1:ncol(tabl)-1)]
+      tabl$`P-value` <- ""
+      tabl[1, ncol(tabl)] <- P
+      names(tabl)[1] <- "变量值"
+      tabl$`P-value` <- as.numeric(tabl$`P-value`)
+      tabl$`P-value` <- round(tabl$`P-value`, 3)
+      for (i in 1:nrow(tabl)) {
+        if(is.na(tabl$`P-value`[i])){
+          tabl$`P-value`[i] <- NA
+        }else if(tabl$`P-value`[i] <= 0.001){
+         tabl$`P-value`[i] <- "< 0.001"
+       }else if(tabl$`P-value`[i] >= 0.999){
+         tabl$`P-value`[i] <- "> 0.999"
+       }
+      }
+      names(tabl)[ncol(tabl)] <- "P值"
+      tabl$`变量名` <- ""
+      tabl$`变量名`[1] <- names(bb0)[2]
+      tabl <- tabl[, c(ncol(tabl), 1:ncol(tabl)-1)]
+      if(j==2)
+        tabl1 <- tabl
+      else
+        tabl1 <- rbind(tabl1, tabl)
+      }
+      if(k==1)
+        tabl2 <- tabl1
+      else
+        tabl2 <- rbind(tabl2, tabl1)
+  }
+  tabl2$`变量名` <- gsub("-结局","",tabl2$`变量名`)
+  tabl2$`变量名` <- gsub("_结局","",tabl2$`变量名`)
+  output1(tabl2)
+}
+```
+

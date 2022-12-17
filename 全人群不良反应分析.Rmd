@@ -1,0 +1,2752 @@
+---
+title: "复方苦参全人群不良反应分析"
+date: "完成时间：`r Sys.Date()`"
+output:
+  word_document: 
+    reference_docx: temp.docx
+    fig_caption: yes
+    fig_height: 6
+    fig_width: 8
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+library(openxlsx)#打开.xlsx文件
+library(foreign)#read.xport
+library(captioner)#表名与图名
+library(knitr)#设置全局选项
+library(arsenal)#tableby
+library(officer);library(flextable)#输出word表格
+library(tmcn)#拆分文本数据
+library(stringdist)#string...
+library(tm)
+library(doParallel)#并行运算
+library(foreach)#foreach
+library(stringr)#str_locata
+library(rlang)
+library(magrittr)
+library(dplyr)#tibble~mulate select...
+library(tidyr)#separate
+library(scales)#percent
+##设置全局选项
+knit_hooks$set(margin = function(before, options, envir){
+  if(before)
+    par(mar = c(4, 4, 1, 0.4)) else NULL
+})
+opts_chunk$set(comment=NA, echo = FALSE, message=FALSE, warning=FALSE, yeshzs='asis', margin=TRUE)
+options(scipen=200, digits=2)
+
+
+#并行设置
+cors_cpu <- detectCores(logical = FALSE)
+cl <- makeCluster(cors_cpu-1)
+
+```
+
+```{r child = '函数群 ffks.Rmd'}
+```
+
+```{r 所用自编函数}
+sim_merge_f <- function(dataset,s){#合并哑变量矩阵等数据集中具有相似变量名的列
+  #是否输出哪些变量被判断为类似并剔除了？
+  
+  for (j in 1:ncol(dataset)) {
+    if (j < ncol(dataset)) {
+      #该矩阵的变量数会不断减少，需加判断以避免报错
+      
+      sim_j <- stringsim(colnames(dataset)[j],
+                         colnames(dataset)[(j + 1):ncol(dataset)])
+      k <- which(sim_j >= s) + j
+      
+      if (length(k) > 0) {
+        dataset[, j] <- foreach(jk = c(j,k), .combine = "+") %do% dataset[, jk]
+        
+        #确认最短的变量名为主列名
+        len_simname <- colnames(dataset)[c(j, k)] %>% nchar(.)
+        colnames(dataset)[j] <-
+          colnames(dataset)[c(j, k)[which.min(len_simname)]]
+        
+        #保留主列，删去相似列
+        dataset <- dataset %>% dplyr::select(.,-c(colnames(.)[k]))
+      }
+    }
+  }
+  return(dataset)
+}
+
+#对于一列字符变量，返回按adr/ae人群发生率排序，且只保留涉及adr/ae人群哑变量的哑变量矩阵。并输出：全体哑变量数、排序前5位的哑变量名称及目标人群涉及比例
+
+Adrae_dtm <- function(dataset){#dataset第1、2列分别为：ADR/AE列、字符列
+  dtm <-
+  as.data.frame(as.matrix(
+    createDTM(
+      dataset[,2],
+      language = "zh",
+      tokenize = NULL,
+      removePunctuation = FALSE,
+      removeNumbers = FALSE,
+      removeStopwords = FALSE
+    )
+  ))
+
+if (sum(grepl("uk",colnames(dtm))) > 0) {
+  dtm <- dtm[,-grep("uk",colnames(dtm))]
+}
+if (sum(grepl("na",colnames(dtm))) > 0) {
+  dtm <- dtm[,-grep("na",colnames(dtm))]
+}
+
+#按adr发生的百分比排序
+  numerator <- dtm[dataset[, 1] == levels(dataset[, 1])[1], ] %>%
+    colSums(.) %>% divide_by(., table(dataset[, 1])[1])
+  
+  dtm <- rbind(numerator, dtm)#放到首行
+  dtm <- dtm[, order(as.numeric(dtm[1, ]), decreasing = TRUE)]#排序
+  
+  dtm[1, ] <- percent(as.numeric(dtm[1, ]), 0.01)
+  
+  NAME <- foreach(i = 1:5, .combine = "c") %do% {
+    paste(names(dtm)[i], "(", dtm[1, i], ")", sep = "")
+  } %>% paste(., collapse = "、")
+  
+  dtm <- dtm[-1, ]#删去首行
+  
+  dummy_vars <- ncol(dtm)#涉及的所有哑变量数量
+  
+  dtm <- apply(dtm, 2, as.numeric) %>% as.data.frame(.)
+  
+  #未发生ADR的名称不保留
+  dtm_adr <- which(numerator > 0) %>% names(.)
+  dtm <- dtm[, which(names(dtm) %in% dtm_adr)]
+  
+  dtm[, ] <- lapply(dtm[, ], as.character)
+  dtm[, ] <- ifelse(dtm[, ] == "0", "否", "是")
+  for (i in 1:ncol(dtm)) {
+    dtm[, i] <- factor(dtm[, i], levels = c("是", "否"))
+  }
+  
+  dtm <- cbind(dataset[, 1], dtm)
+  
+  return(list(
+    dtm = dtm,
+    dummy_vars = dummy_vars,
+    NAME5 = NAME
+  ))
+}
+
+```
+
+
+```{r}
+table_nums <- captioner(prefix = "表")
+fig_nums <- captioner(prefix = "图")
+```
+
+```{r}
+setwd("E:/项目整理/复方苦参不良反应数据分析/R repository/Adverse-reaction-analysis-code-management")
+
+#导入数据
+
+data_o <- read.csv("original xpt dataset/整理后的全数据集.csv") %>% .[, -1]
+
+#复核后的不良事件数据
+data_o_ae_wkh <-
+  read.xlsx("original xpt dataset/3.AE_不良事件(编码).xlsx", startRow = 2)
+#注：此数据中经王凯华核对，6277例次不良事件中84例次被判定为发生ADRs;
+#而gzw确实为194例，因此该数据的评判列信息不对
+
+data_o_ae_gzw <-
+  read.xlsx("original xpt dataset/【龚泽伟提供的6例】AE_不良事件(编码).xlsx",
+            startRow = 2)
+
+#######更新gzw确认后的ADRs患者数据############
+data_o_adr <-
+  read.xlsx("original xpt dataset/最终ADR(编码后)-12.06.xlsx", startRow = 2)
+data_o_adr <- data_o_adr %>% mutate(., 是否发生ADR = "发生ADR")
+
+##最终确定193例患者发生216例次不良反应
+
+#######################
+
+data_o_ae <- data_o_ae_gzw[,-1]
+#共4426例患者发生6279例次不良事件
+
+
+#检查发现KS001-232-0152患者，在早期wkh的数据中记录的不良事件信息与gzw提供的终版ADR数据中事件记录不一致，以最终版为主
+
+data_o_ae[which(
+  data_o_ae$受试者唯一编号 == "KS001-232-0152"),] <- data_o_adr[which(
+    data_o_adr$受试者唯一编号 == "KS001-232-0152"),]
+
+
+#将ae数据中的adr都识别出来
+
+#已从ae表单中识别出216例次不良反应，在ae表中添加“是否发生ADR”列
+rownames(data_o_ae) <- factor(1:nrow(data_o_ae))
+
+data_o_ae_adr <- intersect(data_o_ae[,c(1:5,7:9,30,32)],
+                           data_o_adr[,c(1:5,7:9,30,32)])
+#原wkh编码的ae数据有部分信息不正确，只用其中关键10列做ADR识别
+
+data_o_ae[as.numeric(rownames(data_o_ae_adr)),] <- data_o_ae_adr
+
+
+data_o_ae <- mutate(data_o_ae, 是否发生ADR = NA)
+
+data_o_ae$是否发生ADR <- ifelse(rownames(data_o_ae) %in%
+                              rownames(data_o_ae_adr),
+                            "发生ADR", "未发生ADR") %>%
+  as.factor(.)
+
+
+
+#######
+
+data <- data_o
+
+#原wkh早期数据发生ADR人数193、AE4432，现更新确认
+data$是否为不良事件 <- ifelse(is.na(
+  match(data$受试者唯一编号,data_o_ae$受试者唯一编号)),
+                        "非AE","AE") %>%
+  factor(., levels = c("AE","非AE"))
+
+data$是否发生ADR <- ifelse(is.na(
+  match(data$受试者唯一编号,data_o_adr$受试者唯一编号)),
+                       "未发生ADR", "发生ADR") %>%
+  factor(., levels = c("发生ADR", "未发生ADR"))
+```
+
+```{r}
+
+data_adr <- data[which(data$是否发生ADR == "发生ADR"),]
+ADR_nums <- which(data$是否发生ADR == "发生ADR")
+
+data_ae <- data[which(data$是否为不良事件 == "AE"),]
+AE_nums <- which(data$是否为不良事件 == "AE")
+
+
+data_id_adr <- data %>% dplyr::select(., c("受试者唯一编号", "是否发生ADR"))
+
+data_id_adrae <- data %>% dplyr::select(., c("受试者唯一编号", "是否发生ADR","是否为不良事件"))
+#当导入额外数据集（无ADR信息），用data_id_adr补充ADR信息
+```
+
+
+# 一、概述
+
+## 1.数据来源
+
+&emsp;&emsp;本研究监测`r format(min(as.Date(data$使用苦参注射液开始时间),na.rm = TRUE),"%Y年%m月")`至`r format(max(as.Date(data$使用苦参注射液开始时间)+1,na.rm = TRUE),"%Y年%m月")`期间国内29家医疗机构中所有使用复方苦参注射液的患者。主要收集了两个监测表信息，分别为复方苦参注射液集中监测观察表（A表），复方苦参注射液不良事件观察表（B表）。根据集中监测观察表（A表）的受试者唯一编号（变量USUBJID）与不良事件观察表（B表）的受试者唯一编号匹配后，得到本研究最终用于分析的数据共`r nrow(data)`例。
+
+## 2.数据说明
+
+
+### 2.1 全人群药品不良反应（ADR）数据集说明
+
+&emsp;&emsp;根据复方苦参注射液研究方案中的研究设计，对于使用复方苦参注射液的全人群（`r nrow(data)`例），不良事件与使用复方苦参注射液关联性评估分为肯定有关、很可能有关、可能有关、可能无关、待评价、无法评价6级。然后根据患者信息中回答的评估，将可能有关、很可能有关、肯定有关的关联性评估判定为发生ADR（Adverse Drug Reaction，药品不良反应）；其他关联性评估判定为未发生ADR。针对发生ADR人群（`r nrow(data_adr)`例`r nrow(data_o_adr)`例次）和未发生ADR人群（`r nrow(data)-nrow(data_adr)`例）进行对比分析。
+
+```{r}
+adrs_ser <- data_o_ae %>% 
+  filter(.,报表级别 == "严重") %>%
+  filter(.,是否发生ADR == "发生ADR") %>%
+  dplyr::select(.,受试者唯一编号)
+
+adrs_gen <- data_o_ae %>% 
+  filter(.,报表级别 != "严重") %>%
+  filter(.,是否发生ADR == "发生ADR") %>%
+  dplyr::select(.,受试者唯一编号)
+```
+
+&emsp;&emsp;全人群药品不良反应发生率为`r percent(nrow(data_adr)/nrow(data),0.01)`，发生严重不良反应的患者`r length(unique(adrs_ser$受试者唯一编号))`例`r nrow(adrs_ser)`例次，全人群严重不良反应发生率为`r percent(length(unique(adrs_ser$受试者唯一编号))/nrow(data),0.0001)`，发生ADR人群中严重不良反应发生率为`r percent(length(unique(adrs_ser$受试者唯一编号))/nrow(data_adr),0.01)`；发生一般不良反应的患者`r length(unique(adrs_gen$受试者唯一编号))`例`r nrow(adrs_gen)`例次，全人群一般不良反应发生率为`r percent(length(unique(adrs_gen$受试者唯一编号))/nrow(data),0.0001)`，发生ADR人群中一般不良反应发生率为`r percent(length(unique(adrs_gen$受试者唯一编号))/nrow(data_adr),0.01)`。  
+
+## 3.统计分析方法
+
+&emsp;&emsp;所有的统计分析检验均采用双侧假设检验。本研究最主要的统计分析是描述统计，连续变量采用中位数（四分位，IQR）表述，并进行Shapiro-Wilk正态性检验及方差齐性检验，在满足正态分布且方差齐的条件下，采用t检验进行组间比较，否则采用Wilcoxon秩和检验进行组间比较，并给出两组差值及其95%CI；分类变量采用频数及百分数表达，并采用卡方检验或Fisher精确概率法进行组间比较。组内前后比较，连续性变量采用配对t检验/符号秩检验，分类变量采用McNemar检验或McNemar-Bowker检验。
+
+
+# 二、全人群ADR两组对比分析
+
+
+&emsp;&emsp;针对发生ADR（AdverseDrugReaction，药品不良反应）人群（`r nrow(data_adr)`例）和未发生ADR人群（`r nrow(data)-nrow(data_adr)`例）进行对比分析。患者是否发生药品不良反应是根据B表（不良事件记录表）中的不良事件与使用复方苦参注射液关联性评估来进行定义，当关联性评估为“肯定有关”，“很可能有关”，“可能有关”时，判定发生ADR；若关联性评估为“可能无关”，“待评价”与“无法评价”时，判定未发生ADR。
+
+## 1. 中心分布
+
+```{r}
+#第5列为医院编号
+data$医院编号 <- as.character(data$医院编号)
+
+#概述ADR中心分布结果
+
+first_10 <- data %>% 
+  filter(.,是否发生ADR == "发生ADR") %>% 
+  dplyr::select(.,医院编号) %>% table(.) %>%
+  sort(.,decreasing = TRUE)%>%
+  .[1:10]
+
+des_10 <- 
+  paste(names(first_10),
+        "(", as.numeric(first_10) , "例)",
+        sep = "" , collapse = "、")
+
+```
+
+&emsp;&emsp;本研究共完成复方苦参注射液监测病例数为`r nrow(data)`例，分布在`r (length(unique(data$医院编号)))`个中心，其中发生ADR最多的前10个中心及相应的ADR例数分别为`r des_10`。具体分布情况见`r gsub(": ","",table_nums("tab1"))`。表中第二列和第三列对应的百分比代表某个中心发生ADR和未发生ADR的比例，并按各中心的ADR发生率大小排序，总计列为对应中心人数占总人数的比例。
+
+<tr>**`r table_nums("tab1", caption = "中心分布表")`**</tr>
+
+```{r}
+
+data_temp <- data %>% dplyr::select(., c("是否发生ADR", "医院编号"))
+monitor(data_temp)
+
+rm(first_10, des_10, data_temp)
+```
+
+## 2. 基本特征
+
+### 2.1 性别
+
+```{r}
+data_temp <- data %>% dplyr::select(., c("是否发生ADR", "性别"))
+
+Test <- Group1(data_temp,output = FALSE) %>% 
+  .[,c(1:5,ncol(.))]
+
+des01 <- paste("发生ADR的患者，",Test[1,1],sep="")
+des02 <- paste("未发生ADR的患者，",Test[1,1],sep="")
+
+des1 <- paste(Test[2,1:2],collapse = "")%>%
+  paste(.,paste(Test[3,1:2],collapse = ""),sep = "、")
+des2 <- paste(Test[2,c(1,3)],collapse = "")%>%
+  paste(.,paste(Test[3,c(1,3)],collapse = ""),sep = "、")
+
+des <- paste(des01,des1,sep = ":")%>% #第一组描述
+  paste(.,paste(des02,des2,sep = ":"),sep = "，")%>% #第二组描述
+  paste(.,
+        ifelse(is.na(as.numeric(Test[1,6]))|
+         (as.numeric(Test[1,6])<0.05),
+       "两组的分布具有显著性差异",
+       "两组的分布不具有显著性差异"),
+        sep = "，")%>% #是否具有显著性差异
+  paste(.,paste("(p=",Test[1,6],")",sep = ""))%>% #p值,秩和检验p值在[1,6]
+  gsub(" ","",.)
+
+```
+
+&emsp;&emsp;全人群中`r des`，详见`r gsub(": ","",table_nums("tab2.1"))`。注：本节中其余二分类变量统计描述与此结构一致。
+
+<tr>**`r table_nums("tab2.1", caption = "性别分布表")`**</tr>
+
+```{r}
+#第10列为性别
+output1(Test[,c(1:5,ncol(Test))])
+```
+
+<tr>**`横向占比统计`**</tr>
+
+```{r}
+Group(data_temp, output = FALSE) %>% .[,c(1:5,ncol(.))] %>%
+  output1(.)
+
+rm(Test,des01,des02,des1,des2,data_temp)
+```
+
+
+### 2.2 BMI指数
+
+```{r}
+#[32\30分别为身高体重]
+bmis <- as.numeric(data$身高)/((as.numeric(data$体重)/100)^2)%>%
+  round(.,2)
+temps <- cbind(as.data.frame(bmis),data$是否发生ADR)
+names(temps)[1] <- "BMI指数"
+
+Test <- Group1(temps[,c(2,1)],output = FALSE) %>% 
+  .[,c(1:5,ncol(.))]
+
+des01 <- paste("发生ADR的患者，",Test[1,1],sep="")
+des02 <- paste("未发生ADR的患者，",Test[1,1],sep="")
+
+des1 <- paste("均数(标准差)为",Test[2,2],sep="")%>%
+  paste(.,paste("中位数(上下四分位数)为",Test[3,2],sep=""),sep = ",")
+des2 <- paste("均数(标准差)为",Test[2,3],sep="")%>%
+  paste(.,paste("中位数(上下四分位数)为",Test[3,3],sep=""),sep = ",")
+
+des <- paste(des01,des1,sep = ":")%>% #第一组描述
+  paste(.,paste(des02,des2,sep = ":"),sep = "，")%>% #第二组描述
+  paste(.,
+        ifelse(is.na(as.numeric(Test[1,6]))|
+         (as.numeric(Test[1,6])<0.05),
+       "两组的分布具有显著性差异",
+       "两组的分布不具有显著性差异"),
+        sep = "，")%>% #是否具有显著性差异
+  paste(.,paste("(p=",Test[1,6],")",sep = ""))%>% #p值,秩和检验p值在[1,6]
+  gsub(" ","",.)
+
+```
+
+&emsp;&emsp;全人群中中`r des`，详见`r gsub(": ","",table_nums("tab2.2"))`。注：本节中其余的数值型变量统计描述与此结构一致。
+
+<tr>**`r table_nums("tab2.2", caption = "BMI指数分布表")`**</tr>
+
+```{r}
+Test %>% output1(.)
+
+rm(Test, des, des01, des02, des1, des2)
+```
+
+### 2.3 年龄
+
+```{r}
+data$出生日期 <- gsub("--", "-", data$出生日期) %>%
+  gsub("/", "-", .) %>%
+  gsub("NK", "01", .)
+  
+data$`年龄` <- round((as.Date(data$使用苦参注射液开始时间) -
+                      as.Date(data$出生日期)) / 365.25) %>%
+  as.numeric(.)
+
+```
+
+#### 2.3.1 全人群年龄整体描述
+
+```{r}
+data_temp <- data %>% dplyr::select(., c("是否发生ADR", "年龄"))
+
+Test <- Group1(data_temp, output = FALSE) %>%
+  .[, c(1:5, ncol(.))]
+
+des01 <- paste("发生ADR的患者，", Test[1, 1], sep = "")
+des02 <- paste("未发生ADR的患者，", Test[1, 1], sep = "")
+
+des1 <- paste("均数(标准差)为", Test[2, 2], sep = "") %>%
+  paste(., paste("中位数(上下四分位数)为", Test[3, 2], sep = ""), sep = ",")
+des2 <- paste("均数(标准差)为", Test[2, 3], sep = "") %>%
+  paste(., paste("中位数(上下四分位数)为", Test[3, 3], sep = ""), sep = ",")
+
+des <- paste(des01, des1, sep = ":") %>% #第一组描述
+  paste(., paste(des02, des2, sep = ":"), sep = "，") %>% #第二组描述
+  paste(.,
+        ifelse(
+          is.na(as.numeric(Test[1, 6])) |
+            (as.numeric(Test[1, 6]) < 0.05),
+          "两组的分布具有显著性差异",
+          "两组的分布不具有显著性差异"
+        ),
+        sep = "，") %>% #是否具有显著性差异
+  paste(., paste("(p=", Test[1, 6], ")", sep = "")) %>% #p值,秩和检验p值在[1,6]
+  gsub(" ", "", .)
+
+
+```
+
+&emsp;&emsp;全人群中中`r des`，详见`r gsub(": ","",table_nums("tab3__1"))`。
+
+<tr>**`r table_nums("tab3__1", caption = "总体年龄分布表")`**</tr>
+
+```{r}
+Test %>% output1(.)
+
+rm(des, des01, des02, des1, des2, Test,data_temp)
+```
+
+#### 2.3.2 全人群年龄分层描述
+
+&emsp;&emsp;全人群中发生与未发生ADR两组患者的年龄分布无显著性差异。
+
+<tr>**`r table_nums("tab3__2", caption = "分层年龄分布表")`**</tr>
+
+```{r}
+data$年龄  <- as.numeric(data$年龄)
+AGE_COL <- as.data.frame(data$年龄)
+AGE_COL[, 1] <- as.numeric(AGE_COL[, 1])
+#将年龄分层
+AGE_COL[, 1] <- ifelse(data$年龄  < 18 ,
+                       "<18",
+                       ifelse(
+                         data$年龄  >= 18 &
+                           data$年龄  < 41 ,
+                         "18-40",
+                         ifelse(data$年龄  >= 41 &
+                                  data$年龄  <= 65 ,
+                                "41-65" , ">65")
+                       ))
+
+AGE_COL <- cbind(data$是否发生ADR, AGE_COL)
+AGE_COL[, 2] <- factor(AGE_COL[, 2] ,
+                       levels = c("<18" , "18-40" ,
+                                  "41-65", ">65"))
+names(AGE_COL) <- c("是否发生ADR", "年龄")
+
+Group1(AGE_COL[, 1:2], output = FALSE) %>% 
+  .[, c(1:5, ncol(.))] %>% output1(.)
+
+rm(AGE_COL)
+```
+
+### 2.4 吸烟、饮酒、体育锻炼情况
+
+&emsp;&emsp;发生不良反应的患者人群存在吸烟、饮酒、体育锻炼情况相关信息记录，此处通过`r gsub(": ","",table_nums("tab2.4"))`展示发生ADR人群关于这三个特征的描述。
+
+<tr>**`r table_nums("tab2.4", caption = "发生ADR人群的吸烟、饮酒、体育锻炼情况描述")`**</tr>
+
+```{r 只描述不良反应人群的基本信息}
+
+#不良事件患者信息表，其中15、20、22列分别对应吸烟喝酒体育锻炼
+data_temp <- read.xlsx("original xpt dataset/SU_基本信息.xlsx")
+#该数据读取异常
+
+data_temp_adr <- data_temp %>%
+  filter(.,USUBJID %in% data_adr$受试者唯一编号) %>%
+  dplyr::select(.,USUBJID,SUYN1,SUSPEC2,SUYN3) %>%
+  rename(.,受试者唯一编号 = USUBJID,
+         吸烟情况 = SUYN1,
+         饮酒情况 = SUSPEC2,
+         体育锻炼 = SUYN3)
+
+data_temp_adr <- data_temp_adr %>%
+  group_by(受试者唯一编号) %>%  ##该变量为分类变量，以该变量中的元素取子集。
+  summarise(
+    吸烟情况 = table(吸烟情况) %>% 
+                  sort(.decreasing = TRUE) %>% names(.) %>% .[1],
+    饮酒情况 = ifelse(is.na(饮酒情况),"未知",饮酒情况) %>%
+      table(.) %>%
+      sort(.decreasing = TRUE) %>% names(.) %>% .[1],
+    体育锻炼 = table(体育锻炼) %>% 
+                  sort(.decreasing = TRUE) %>% names(.) %>% .[1]) 
+
+data_temp_adr$吸烟情况 <- factor(data_temp_adr$吸烟情况,
+                              levels = c("是", "否"))
+
+Describe(data_temp_adr[, -1])
+
+rm(data_temp, data_temp_adr)
+```
+
+### 2.5 心率、收缩压、舒张压
+
+&emsp;&emsp;发生与未发生ADR两组人群的心率、收缩压、舒张压都不存在显著性差异。
+
+<tr>**`r table_nums("tab2.5", caption = "发生ADR人群的心率、收缩压、舒张压描述")`**</tr>
+
+```{r}
+data_temp <- data %>%
+  dplyr::select(., c("是否发生ADR", "心率", "收缩压", "舒张压"))
+
+Group1(data_temp, output = FALSE) %>% .[,c(1:5,ncol(.))] %>% output1(.)
+
+rm(data_temp)
+```
+
+
+## 3.省份
+
+```{r}
+#有几个地址写的是”经济开发区“，无法判断所属省份！按空值处理。
+shiyan <- as.data.frame(data$标准化住址)
+names(shiyan) <- "省份"
+#全取前两个字再说
+shiyan$省份 <- substring(shiyan$省份,1,2)
+shiyan$省份[grep("内蒙",shiyan$省份)] <- "内蒙古"
+shiyan$省份[grep("黑龙",shiyan$省份)] <- "黑龙江"
+shiyan$省份[grep("周口",shiyan$省份)] <- "河南"
+shiyan$省份[grep("河内",shiyan$省份)] <- "河南"
+
+shiyan$省份[grep("经济",shiyan$省份)] <- NA
+df1 <- cbind(data$是否发生ADR, shiyan)
+
+rm(shiyan)
+```
+
+&emsp;&emsp;在使用复方苦参注射液的`r nrow(data)`例患者中，各省份发生ADR的比例从高到低排列见`r gsub(": ","",table_nums("tab3"))`所示。表中第二列和第三列对应的百分比代表省份发生ADR和未发生ADR的比例，总计列为对应省份人数及占总人数的比例。
+
+<tr>**`r table_nums("tab3", caption = "省份分布表")`**</tr>
+
+```{r}
+monitor(df1[,c(1,2)])
+
+rm(df1)
+```
+
+## 4.就医科室
+
+&emsp;&emsp;使用复方苦参注射液的`r nrow(data)`例患者中，就诊科室发生ADR的比例从高到低排列见`r gsub(": ","",table_nums("tab4"))`所示。
+
+<tr>**`r table_nums("tab4", caption = "科室分布表")`**</tr>
+
+```{r}
+names(data)[grep("科室标准化",names(data))] <- "科室"
+data$科室 <- gsub("放射治疗科" ,"放疗科" , data$科室)
+
+data_temp <- data %>% dplyr::select(., c("是否发生ADR", "科室"))
+monitor(data_temp)
+```
+
+## 5.西医诊断
+
+### 5.1 主要诊断
+
+```{r}
+#一个人1次主要诊断，例数与例次相同
+```
+
+
+```{r}
+#重新导入数据
+data_zd <- read.xlsx("original xpt dataset/西医主要诊断（肿瘤1级和4级；其他诊断1级和3级）-2022年4月20日-2022年5月15日.xlsx")
+
+#只使用目标数据集的人群
+
+data_zd <- data_zd %>%
+  rename(受试者唯一编号  = USUBJID) %>%
+  filter(., 受试者唯一编号  %in% data$受试者唯一编号) %>%
+  merge(. , data_id_adr ,  by = "受试者唯一编号")
+
+data_zd$是否为肿瘤 <- ifelse(data_zd$是否为肿瘤 == "否",
+                        "否", "是")
+
+data_zd_adr <- filter(data_zd,
+                      受试者唯一编号 %in% data_adr$受试者唯一编号)
+
+data_zd_ae <- filter(data_zd,
+                      受试者唯一编号 %in% data_ae$受试者唯一编号)
+
+```
+
+
+```{r}
+##############对data_zd_adr进行分类统计######
+
+d_4 <- data_zd_adr %>% 
+  dplyr::select(.,c("肿瘤4级/其他3级","1级分类"))
+
+n_1 <- table(d_4$`1级分类`) %>%
+  sort(., decreasing = TRUE) %>%
+  names(.) %>% 
+  .[-grep("扩展码",.)]
+
+#######ADR西医主要诊断系统例数与例次统计#####
+
+#例数
+casenums <- foreach(i = 1:length(n_1),.combine = "c") %do%
+  {grep(n_1[i],data_zd_adr$`1级分类`) %>% length(.)}
+#例次
+cases <- foreach(i = 1:length(n_1),.combine = "c") %do%
+  {grep(n_1[i],d_4$`1级分类`) %>% length(.)}
+
+
+casestab_adr <- data.frame("一级系统分类" = n_1,
+                           "例数" = casenums,
+                           "例数占ADR人群比" =
+                             (casenums/nrow(data_adr)) %>%
+                             percent(.,0.01))
+
+casestab_adr_o <- flextable(casestab_adr) %>% 
+  align(align = "center" , part = "all")#_output
+
+```
+
+
+```{r 主要诊断肿瘤统计}
+
+d_4 <- data_zd %>%
+  filter(.,是否为肿瘤 == "是") %>%
+  dplyr::select(., c("肿瘤4级/其他3级", "1级分类"))
+
+
+n_1 <- table(d_4[,2])%>% sort(.,decreasing = TRUE)%>%names(.)
+
+#启动并行运算
+registerDoParallel(cl)
+tabs <- foreach(i = 1:length(n_1), .combine = "rbind") %do%
+  {
+d_5 <- d_4 %>% filter(.,`1级分类` == n_1[i] )
+
+tab <- table(d_5$`肿瘤4级/其他3级`) %>% sort(.,decreasing = TRUE)
+
+tab_1 <- data.frame("1级系统分类名称" = paste(n_1[i],":例数",
+                      length(grep(n_1[i],data_zd$`1级分类`)),"(",
+                      (length(grep(n_1[i],data_zd$`1级分类`))/
+                         nrow(data_zd)) %>%
+                        percent(.,0.01),
+                      ")",sep = "") %>% rep(.,length(tab)),
+                    "肿瘤4级分类名称" = names(tab),
+                    "全人群中发生例数" = NA,
+                    "在全人群占比" = NA,
+                    "AE人群中发生例数" = NA,
+                    "在AE人群占比" = NA,
+                    "ADR人群中发生例数" = NA,
+                    "在ADR人群占比" = NA)
+
+for (j in 1:nrow(tab_1)) {
+  tab_1$全人群中发生例数[j] <-
+    grep(tab_1[j,2],data_zd$`肿瘤4级/其他3级`) %>% length(.)
+  
+  tab_1$在AE人群占比[j] <- 
+    ((tab_1[j,3])/nrow(data)) %>% percent(.,0.001)
+  
+  tab_1$AE人群中发生例数[j] <-
+    grep(tab_1[j,2],data_zd_ae$`肿瘤4级/其他3级`) %>% length(.)
+  
+  tab_1$在AE人群占比[j] <- 
+    ((tab_1[j,5])/nrow(data_ae)) %>% percent(.,0.001)
+  
+  tab_1$ADR人群中发生例数[j] <-
+    grep(tab_1[j,2],data_zd_adr$`肿瘤4级/其他3级`) %>% length(.)
+  
+  tab_1$在ADR人群占比[j] <- 
+    ((tab_1[j,7])/nrow(data_adr)) %>% percent(.,0.001)
+}
+
+#按ADR人群中的例数排序
+tab_1 <- tab_1[order(tab_1$`ADR人群中发生例数`,decreasing=TRUE),]
+
+return(tab_1)
+}
+stopImplicitCluster()#关闭并行
+
+#output  癌症类别下记为tabs2.0
+tabs_2.0 <- output1(tabs)  %>% 
+  merge_v(. , j = 1 , part = "body") %>%
+  theme_vanilla(.) %>% align(align = "center" , part = "all")
+```
+
+
+```{r 主要诊断非肿瘤统计}
+
+d_4 <- data_zd %>%
+  filter(.,是否为肿瘤 == "否" & 
+           `1级分类` != "肿瘤"&
+           `1级分类` != "") %>%
+  dplyr::select(., c("肿瘤4级/其他3级", "1级分类"))
+
+n_1 <- table(d_4[, 2]) %>% sort(., decreasing = TRUE) %>% names(.)
+
+registerDoParallel(cl)#启动并行运算
+tabs <- foreach(i = 1:length(n_1), .combine = "rbind") %do%
+  {
+d_5 <- d_4 %>% filter(.,`1级分类` == n_1[i] )
+
+tab <- table(d_5$`肿瘤4级/其他3级`) %>% sort(.,decreasing = TRUE)
+
+tab_1 <- data.frame("1级系统分类名称" = 
+                      paste(n_1[i],":例数",
+                            length(grep(n_1[i],data_zd$`1级分类`)),
+                            "(",
+                            (length(grep(n_1[i],data_zd$`1级分类`))/
+                               nrow(data_zd)) %>%
+                              percent(.,0.01),
+                            ")",sep = "") %>% rep(.,length(tab)),
+                    "其他3级分类名称" = names(tab),
+                    "全人群中发生例数" = NA,
+                    "在全人群占比" = NA,
+                    "AE人群中发生例数" = NA,
+                    "在AE人群占比" = NA,
+                    "ADR人群中发生例数" = NA,
+                    "在ADR人群占比" = NA)
+
+for (j in 1:nrow(tab_1)) {
+  tab_1$全人群中发生例数[j] <- 
+    grep(tab_1[j,2],data_zd$`肿瘤4级/其他3级`) %>% length(.)
+  
+  tab_1$在全人群占比[j] <- 
+    ((tab_1[j,3])/nrow(data)) %>% percent(.,0.001)
+  
+  tab_1$AE人群中发生例数[j] <-
+    grep(tab_1[j,2],data_zd_ae$`肿瘤4级/其他3级`) %>% length(.)
+  
+  tab_1$在AE人群占比[j] <- 
+    ((tab_1[j,5])/nrow(data_ae)) %>% percent(.,0.001)
+  
+  tab_1$ADR人群中发生例数[j] <-
+    grep(tab_1[j,2],data_zd_adr$`肿瘤4级/其他3级`) %>% length(.)
+  
+  tab_1$在ADR人群占比[j] <- 
+    ((tab_1[j,7])/nrow(data_adr)) %>% percent(.,0.001)
+}
+
+#按ADR人群中的例数排序
+tab_1 <- tab_1[order(tab_1$`ADR人群中发生例数`,decreasing=TRUE),]
+
+return(tab_1)
+  }
+stopImplicitCluster()#关闭并行
+###
+
+tabs_2 <- output1(tabs)  %>% 
+  merge_v(. , j = 1 , part = "body") %>%
+  theme_vanilla(.) %>% align(align = "center" , part = "all")
+
+```
+
+
+```{r}
+#主要诊断类别的组间比较检验
+
+#进行哑变量处理（作为一种特殊的矩阵形式，需要先转换为矩阵再转换为数据框）
+data_zd$`1级分类` <- gsub(",", "\n", data_zd$`1级分类`) %>%
+  gsub("X 扩展码","",.)
+
+data_temp <- data_zd %>% dplyr::select(., c("是否发生ADR" , "1级分类"))
+
+dtm_temp <- Adrae_dtm(data_temp)
+
+NAME <- dtm_temp$NAME5
+
+main_diags1 <- dtm_temp$dummy_vars#涉及的主要诊断类别数目
+
+Test <- Group1(dtm_temp$dtm, output = FALSE) %>% .[,c(1:5,ncol(.))]
+
+rm(data_temp, dtm_temp)
+
+#p值小于等于0.05的变量名
+Tsn <- Test[which(as.numeric(Test$`P值`) <= 0.05 | 
+                   Test$`P值` == "< 0.001"),1] %>%
+  paste(. , collapse = "、")
+
+```
+
+```{r}
+#主要诊断具体名称的组间比较检验
+
+########西医主要诊断的Group组间比较#######
+#进行哑变量处理（作为一种特殊的矩阵形式，需要先转换为矩阵再转换为数据框）
+data_zd$`DG1_ST（标准化）` <- gsub(",", "\n", data_zd$`DG1_ST（标准化）`)
+
+data_temp <- data_zd %>% dplyr::select(., c("是否发生ADR" , "DG1_ST（标准化）"))
+
+dtm_temp <- Adrae_dtm(data_temp)
+
+NAME <- dtm_temp$NAME5
+
+main_diags2 <- dtm_temp$dummy_vars#涉及的主要诊断数目
+
+Test1 <- Group1(dtm_temp$dtm, output = FALSE) %>% .[,c(1:5,ncol(.))]
+
+rm(data_temp, dtm_temp)
+
+#p值小于等于0.05的变量名
+Tsn1 <- Test1[which(as.numeric(Test1$`P值`) <= 0.05 | 
+                   Test1$`P值` == "< 0.001"),1] %>%
+  paste(. , collapse = "、")
+
+```
+
+#### 5.1.1 ADR人群诊断类别统计
+
+```{r}
+#describe sentences
+des_sen <- paste(casestab_adr[1:5,1],
+                 casestab_adr[1:5,2],
+                 "例","(",casestab_adr[1:5,3],")",
+                 casestab_adr[1:5,4],sep = "") %>% 
+  paste(.,collapse = "，")
+```
+
+
+&emsp;&emsp;在`r nrow(data_adr)`例ADR患者中，西医主要诊断1级系统分类中ADR发生例次降序排列，前5位的是，`r des_sen`。
+
+<tr>**`r table_nums("tab5.1.0", caption = "ADR人群西医主要诊断系统分类统计表")`**</tr>
+
+```{r}
+casestab_adr_o
+```
+
+
+#### 5.1.2 诊断名例次统计
+
+&emsp;&emsp;*30130例研究人群中，肿瘤人群共23814例，非肿瘤人群6316例。*分别统计肿瘤与非肿瘤人群的诊断4级分类名称,详见`r gsub(": ","",table_nums("tab5.1.1"))`，`r gsub(": ","",table_nums("tab5.1.2"))`。
+
+<tr>**`r table_nums("tab5.1.1", caption = "肿瘤4级分类名称统计")`**</tr>
+
+
+```{r}
+tabs_2.0
+```
+
+
+<tr>**`r table_nums("tab5.1.2", caption = "其他3级分类名称统计")`**</tr>
+
+```{r}
+tabs_2
+```
+
+#### 5.1.3 组间比较
+
+##### 所属类别
+
+```{r}
+
+des01 <- paste("发生ADR的患者，",Test[1,1],sep="")
+des02 <- paste("未发生ADR的患者，",Test[1,1],sep="")
+
+des1 <- paste(Test[2,1:2],collapse = "")%>%
+  paste(.,paste(Test[3,1:2],collapse = ""),sep = "、")
+des2 <- paste(Test[2,c(1,3)],collapse = "")%>%
+  paste(.,paste(Test[3,c(1,3)],collapse = ""),sep = "、")
+
+des <- paste(des01,des1,sep = ":")%>% #第一组描述
+  paste(.,paste(des02,des2,sep = ":"),sep = "，")%>% #第二组描述
+  paste(.,
+        ifelse(is.na(as.numeric(Test[1,6]))|
+         (as.numeric(Test[1,6])<0.05),
+       "两组的分布具有显著性差异",
+       "两组的分布不具有显著性差异"),
+        sep = "，")%>% #是否具有显著性差异
+  paste(.,paste("(p=",Test[1,6],")",sep = ""))%>% #p值,秩和检验p值在[1,6]
+  gsub(" ","",.)
+
+rm(des01,des02,des1,des2)
+
+
+```
+
+&emsp;&emsp;全人群共涉及`r main_diags1`种西医主要诊断的肿瘤4级/其他3级分类名称。`r des`，其它主要诊断的比较检验过程保持一致。具有显著性差异的主要诊断有：`r Tsn`。比较检验结果详见`r gsub(": ","",table_nums("tab5.1.3"))`,且表中只保留发生ADR的西医主要诊断。
+
+<tr>**`r table_nums("tab5.1.3", caption = "西医主要诊断所属分类详表")`**</tr>
+
+```{r}
+output1(Test)
+
+rm(dtm,NAME,Test,Tsn,casenums,cases,casestab_adr,casestab_adr_o,des_sen,tab_temp,tabs_2)
+```
+
+##### 诊断名称
+
+```{r}
+
+des01 <- paste("发生ADR的患者，",Test1[1,1],sep="")
+des02 <- paste("未发生ADR的患者，",Test1[1,1],sep="")
+
+des1 <- paste(Test1[2,1:2],collapse = "")%>%
+  paste(.,paste(Test1[3,1:2],collapse = ""),sep = "、")
+des2 <- paste(Test1[2,c(1,3)],collapse = "")%>%
+  paste(.,paste(Test1[3,c(1,3)],collapse = ""),sep = "、")
+
+des <- paste(des01,des1,sep = ":")%>% #第一组描述
+  paste(.,paste(des02,des2,sep = ":"),sep = "，")%>% #第二组描述
+  paste(.,
+        ifelse(is.na(as.numeric(Test1[1,6]))|
+         (as.numeric(Test1[1,6])<0.05),
+       "两组的分布具有显著性差异",
+       "两组的分布不具有显著性差异"),
+        sep = "，")%>% #是否具有显著性差异
+  paste(.,paste("(p=",Test1[1,6],")",sep = ""))%>% #p值,秩和检验p值在[1,6]
+  gsub(" ","",.)
+
+rm(des01,des02,des1,des2)
+
+```
+
+&emsp;&emsp;全人群共涉及`r main_diags2`种西医主要诊断名称。`r des`，其它主要诊断的比较检验过程保持一致。具有显著性差异的主要诊断有：`r Tsn1`。比较检验结果详见`r gsub(": ","",table_nums("tab5.1.31"))`,且表中只保留发生ADR的西医主要诊断。
+
+<tr>**`r table_nums("tab5.1.31", caption = "西医主要诊断名称详表")`**</tr>
+
+```{r}
+output1(Test1)
+
+rm(data_zd,data_zd_adr,data_zd_ae,dtm,NAME,Test,Tsn,casenums,cases,casestab_adr,casestab_adr_o,des_sen,tab_temp,tabs_2)
+```
+
+
+### 5.2 次要诊断
+
+```{r 原始诊断数据预处理}
+
+#以新数据集重新绘制统计表格
+data_zd <- read.xlsx("original xpt dataset/程序分类诊断结果2022.05.16.xlsx")
+data_zd <- data_zd %>%
+  dplyr::select(., c(USUBJID, I__, J__)) %>%
+  rename(., c(
+    "受试者唯一编号" = "USUBJID",
+    "次要诊断标准化" = "I__",
+    "次要诊断系统分类" = "J__")) %>% 
+  filter(受试者唯一编号 %in% data$受试者唯一编号) %>%
+  merge(. , data_id_adr ,by = "受试者唯一编号")
+
+
+#找到结尾为.的字符并删除
+it <- nchar(data_zd$次要诊断标准化)
+it1 <- substr(data_zd$次要诊断标准化,it,it)
+
+data_zd$次要诊断标准化[grep("\\.", it1)] <-
+  substr(data_zd$次要诊断标准化[grep("\\.", it1)],
+         1,
+         nchar(data_zd$次要诊断标准化[grep("\\.", it1)]) - 1)
+rm(it, it1)
+
+it <- nchar(data_zd$次要诊断系统分类)
+it1 <- substr(data_zd$次要诊断系统分类,it,it)
+
+data_zd$次要诊断系统分类[grep("\\.",it1)] <- 
+  substr(data_zd$次要诊断系统分类[grep("\\.",it1)],
+         1,
+         nchar(data_zd$次要诊断系统分类[grep("\\.",it1)])-1)
+rm(it, it1)
+
+
+
+data_zd_adr <- filter(data_zd,
+                      受试者唯一编号 %in% data_adr$受试者唯一编号)
+
+data_zd_ae <- filter(data_zd,
+                      受试者唯一编号 %in% data_ae$受试者唯一编号)
+```
+
+
+```{r}
+d_1 <-
+  separate(data_zd_adr[, c(1, 2)] ,
+           "次要诊断标准化" ,
+           into = c(paste("v", 1:10, sep = "")) ,
+           sep = "\\.")#将所有诊断按逗号分割
+d_2 <-
+  separate(data_zd_adr[, c(1, 3)] ,
+           "次要诊断系统分类" ,
+           into = c(paste("w", 1:10, sep = "")) ,
+           sep = "\\.")#将所有诊断分类按逗号分割
+
+
+#将每一例的诊断与诊断分类对应起来,提取所有不重复的诊断及其分类
+
+d_4 <- foreach(i = 2:ncol(d_1), .combine = "rbind") %do% 
+  {
+    cbind(d_1[, i], d_2[, i])
+  } %>% as.data.frame(.) %>%
+  rename(诊断名 = V1,
+            系统名 = V2) %>% na.omit(.)
+
+
+n_1 <- filter(d_4, 系统名 != "UK") %>%
+  dplyr::select(.,系统名)%>%
+  table(.) %>%
+  sort(., decreasing = TRUE) %>%
+  names(.)
+
+
+#######ADR西医次要诊断系统例数与例次统计#####
+
+casenums <- foreach(i = 1:length(n_1),.combine = "c") %do%
+  {grep(n_1[i],data_zd_adr$次要诊断系统分类) %>% length(.)}
+#例次
+cases <- foreach(i = 1:length(n_1),.combine = "c") %do%
+  {grep(n_1[i],d_4$系统名) %>% length(.)}
+
+
+casestab_adr <- data.frame("系统分类名称" = n_1, 
+                           "例数" = casenums, 
+                           "例数占ADR人群比" = (casenums / nrow(data_adr)) %>%
+                             percent(., 0.01), 
+                           "例次" = cases, 
+                           "例次占总比" = (cases / sum(cases)) %>% 
+                             percent(., 0.01))
+
+casestab_adr_o <-
+  flextable(casestab_adr) %>%
+  align(align = "center" , part = "all")#_output
+
+```
+
+```{r}
+#不合理数据调整
+
+data_zd$次要诊断系统分类  <-
+  gsub("消化系统疾病泌尿生殖系统疾病",
+       "消化系统疾病.泌尿生殖系统疾病", data_zd$次要诊断系统分类) %>%
+  gsub("循环系统疾病内分泌、营养和代谢疾病",
+       "循环系统疾病.内分泌、营养和代谢疾病", .) %>%
+  gsub("循环系统疾病血液或造血器官疾病",
+       "循环系统疾病.血液或造血器官疾病", .) %>%
+  gsub("肿瘤肿瘤", "肿瘤", .) %>%
+  gsub(" ", "", .) %>%
+  ifelse(grepl("高血压", data_zd$次要诊断标准化), "循环系统疾病", .)
+
+data_zd$次要诊断标准化  <-
+  gsub("\\(", "（", data_zd$次要诊断标准化) %>%
+  gsub("\\)", "）", .) %>%
+  gsub(" ", "", .) %>%
+  ifelse(grepl("缺血性心脏", .), "缺血性心脏病", .) %>%
+  ifelse(. == "高血压", "高血压病", .)
+
+d_1 <-
+  separate(data_zd[, c(1, 2)] ,
+           "次要诊断标准化" ,
+           into = c(paste("v", 1:100, sep = "")) ,
+           sep = "\\.")#将所有诊断按逗号分割
+d_2 <-
+  separate(data_zd[, c(1, 3)] ,
+           "次要诊断系统分类" ,
+           into = c(paste("w", 1:100, sep = "")) ,
+           sep = "\\.")#将所有诊断分类按逗号分割
+
+
+#将每一例的诊断与诊断分类对应起来,提取所有不重复的诊断及其分类
+
+d_4 <- foreach(i = 2:ncol(d_1), .combine = "rbind") %do%
+  {
+    cbind(d_1[, i], d_2[, i])
+  } %>% as.data.frame(.) %>%
+  rename(诊断名  = V1,
+            系统名  = V2) %>% na.omit(.)
+
+
+n_1 <- filter(d_4, 系统名 != "UK" & 
+                系统名 != "传统医学证候"&
+                系统名 != "脾虚痰湿证") %>%
+  dplyr::select(.,系统名)%>% 
+  table(.) %>% as.matrix(.) %>% t(.) %>% as.data.frame(.) %>%
+  sim_merge_f(., 0.75) %>% #某些次要诊断中存在多个不规范的名称
+  .[,order(.,decreasing = TRUE)] %>% names(.)
+
+
+######绘制系统分类及例次统计表格#######
+
+
+###
+registerDoParallel(cl)#启动并行运算
+tabs <- foreach(i = 1:length(n_1), 
+                .packages = c("dplyr","magrittr","scales"),
+                .combine = "rbind") %dopar%
+  {
+d_5 <- d_4 %>% filter(.,系统名 == n_1[i] )
+
+tab <- table(d_5$诊断名) %>% sort(.,decreasing = TRUE)
+
+tab_1 <- data.frame("系统分类名称" = paste(n_1[i],":例数",
+                      length(grep(n_1[i],data_zd$次要诊断系统分类)),"(",
+                      (length(grep(n_1[i],data_zd$次要诊断系统分类))/
+                         nrow(data_zd)) %>%
+                        percent(.,0.01),
+                      ")",sep = "") %>% rep(.,length(tab)),
+                    "诊断名称" = names(tab),
+                    "全人群中发生例数" = NA,
+                    "在全人群占比" = NA,
+                    "AE人群中发生例数" = NA,
+                    "在AE人群占比" = NA,
+                    "ADR人群中发生例数" = NA,
+                    "在ADR人群占比" = NA)
+
+
+for (j in 1:nrow(tab_1)) {
+  tab_1$全人群中发生例数[j] <-
+    grep(tab_1[j,2],data_zd$次要诊断标准化) %>% length(.)
+
+  tab_1$在全人群占比[j] <-
+    ((tab_1[j,3])/nrow(data)) %>% percent(.,0.001)
+
+  tab_1$AE人群中发生例数[j] <-
+    grep(tab_1[j,2],data_zd_ae$次要诊断标准化) %>% length(.)
+
+  tab_1$在AE人群占比[j] <-
+    ((tab_1[j,5])/nrow(data_ae)) %>% percent(.,0.001)
+
+  tab_1$ADR人群中发生例数[j] <-
+    grep(tab_1[j,2],data_zd_adr$次要诊断标准化) %>% length(.)
+
+  tab_1$在ADR人群占比[j] <-
+    ((tab_1[j,7])/nrow(data_adr)) %>% percent(.,0.001)
+}
+
+#按ADR人群中的例数排序
+tab_1 <- tab_1[order(tab_1$ADR人群中发生例数,decreasing=TRUE),]
+
+return(tab_1)
+}
+stopImplicitCluster()#关闭并行
+###
+
+tabs_2 <- output1(tabs)  %>% 
+  merge_v(. , j = 1 , part = "body") %>%
+  theme_vanilla(.) %>% align(align = "center" , part = "all")
+
+```
+
+
+```{r 为次要诊断统计表添加例次比}
+# tabs_1$全人群例次占比 <- 
+#   (tabs_1$全人群中发生例数/sum(tabs_1$全人群中发生例数)) %>% percent(.,0.001)
+# 
+# tabs_1$AE人群例次占比 <- 
+#   (tabs_1$AE人群中发生例数/sum(tabs_1$AE人群中发生例数)) %>% percent(.,0.001)
+# 
+# 
+# tabs_1$ADR人群例次占比 <-
+#   (tabs_1$ADR人群中发生例数/sum(tabs_1$ADR人群中发生例数)) %>% percent(.,0.001)
+# 
+# tabs_1 <- tabs_1[,c(1:4,9,5:6,10,7:8,11)]
+# 
+# 
+# tabs_1_Secondary_diagnosis <- tabs_1[which(tabs_1$全人群中发生例数 > 0),]#次要诊断（保留该数据空间）
+# # write.csv(tabs_1_Secondary_diagnosis,"次诊断例次统计.csv")
+# 
+# 
+# tabs_2 <- output1(tabs_1_Secondary_diagnosis)  %>% 
+#   merge_v(. , j = 1 , part = "body") %>%
+#   theme_vanilla(.) %>% align(align = "center" , part = "all")
+
+```
+
+
+```{r}
+data_zd$次要诊断标准化 <- gsub("\\.","\n",data_zd$次要诊断标准化)
+
+data_temp <- data_zd %>% dplyr::select(., c("是否发生ADR" , "次要诊断标准化"))
+
+dtm_temp <- Adrae_dtm(data_temp)
+
+NAME <- dtm_temp$NAME5
+
+main_diags2 <- dtm_temp$dummy_vars#涉及的诊断数目
+
+Test <- Group1(dtm_temp$dtm, output = FALSE) %>% .[,c(1:5,ncol(.))]
+
+rm(data_temp, dtm_temp)
+
+Tsn <- Test[which(as.numeric(Test$`P值`) <= 0.05 | 
+                   Test$`P值` == "< 0.001"),1] %>%
+  paste(. , collapse = "、")
+```
+
+
+#### 5.2.1 ADR人群诊断类别统计
+
+```{r}
+#describe sentences
+des_sen <- paste(casestab_adr[1:5,1],
+                 casestab_adr[1:5,2],
+                 "例","(",casestab_adr[1:5,3],")",
+                 casestab_adr[1:5,4],"例次",sep = "") %>%
+  paste(.,collapse = "，")
+
+```
+
+&emsp;&emsp;在`r nrow(data_adr)`例ADR患者中，西医次要诊断系统分类中ADR发生例次降序排列，前5位的是，`r des_sen`。
+
+<tr>**`r table_nums("tab5.2.1", caption = "ADR人群西医次要诊断系统分类统计表")`**</tr>
+
+```{r}
+casestab_adr_o
+```
+
+
+#### 5.2.2 诊断名例次统计
+
+<tr>**`r table_nums("tab5.2.2", caption = "西医次要诊断例次统计表")`**</tr>
+
+```{r}
+tabs_2
+```
+
+#### 5.2.3 组间比较
+
+具有显著性差异的次要诊断有：`r Tsn`。比较检验结果详见`r gsub(": ","",table_nums("tab5.2.3"))`,且表中只保留发生ADR的西医次要诊断。
+
+<tr>**`r table_nums("tab5.2.3", caption = "西医次要诊断详表")`**</tr>
+
+```{r}
+output1(Test)
+
+rm(dtm,NAME,Test,Tsn)
+```
+
+## 6.中医诊断
+
+### 6.1 主要诊断
+
+```{r}
+#一个人1次主要诊断，例数与例次相同
+```
+
+```{r}
+#重新导入数据
+data_zd <- read.xlsx("original xpt dataset/DG_中医诊断(标准化)-定稿-2022年05月19日.xlsx",
+                     sheet =1, startRow = 2)
+
+data_zd <- data_zd %>%
+  dplyr::select(.,
+                c(
+                  受试者唯一编号,
+                  中医主要诊断标准化,
+                  中医主要诊断标准化系统分类,
+                  中医主要诊断中医证候,
+                  中医次要诊断标准化,
+                  中医次要诊断中医证候
+                )) %>%
+  filter(., 受试者唯一编号  %in% data$受试者唯一编号) %>%
+  merge(. , data_id_adr , by = "受试者唯一编号")
+
+
+data_zd_adr <- filter(data_zd,
+                      受试者唯一编号 %in% data_adr$受试者唯一编号)
+
+data_zd_ae <- filter(data_zd,
+                      受试者唯一编号 %in% data_ae$受试者唯一编号)
+
+```
+
+
+```{r}
+##############对data_zd_adr进行分类统计######
+
+d_4 <- data_zd_adr %>%
+  dplyr::select(., c("中医主要诊断标准化",
+                     "中医主要诊断标准化系统分类")) %>%
+  rename(系统名  =  中医主要诊断标准化系统分类) %>%
+  na.omit(.)
+
+
+n_1 <- table(d_4$系统名) %>%
+  sort(., decreasing = TRUE) %>% names(.)
+
+#######ADR西医主要诊断系统例数与例次统计#####
+
+casenums <- foreach(i = 1:length(n_1),.combine = "c") %do%
+  {grep(n_1[i],data_zd_adr$中医主要诊断标准化系统分类) %>% length(.)}
+#例次
+cases <- foreach(i = 1:length(n_1),.combine = "c") %do%
+  {grep(n_1[i],d_4$系统名) %>% length(.)}
+
+
+casestab_adr <- data.frame("系统分类名称" = n_1, 
+                           "例数" = casenums, 
+                           "例数占ADR人群比" = (casenums / nrow(data_adr)) %>%
+                             percent(., 0.01), 
+                           "例次" = cases, 
+                           "例次占总比" = (cases / sum(cases)) %>% 
+                             percent(., 0.01))
+
+casestab_adr_o <-
+  flextable(casestab_adr) %>%
+  align(align = "center" , part = "all")#_output
+
+```
+
+
+
+```{r}
+##############对data_zd进行分类统计######
+
+d_4 <- data_zd %>%
+  dplyr::select(., c("中医主要诊断标准化",
+                     "中医主要诊断标准化系统分类")) %>%
+  rename(诊断名  =  中医主要诊断标准化,
+         系统名  =  中医主要诊断标准化系统分类) %>%
+  na.omit(.)
+
+
+n_1 <- table(d_4$系统名) %>%
+  sort(., decreasing = TRUE) %>% names(.)
+
+###
+tabs <- foreach(i = 1:length(n_1), 
+                .packages = c("dplyr","magrittr","scales"),
+                .combine = "rbind") %do%
+  {
+d_5 <- d_4 %>% filter(.,系统名 == n_1[i] )
+
+tab <- table(d_5$诊断名) %>% sort(.,decreasing = TRUE)
+
+tab_1 <- data.frame("系统分类名称" = paste(n_1[i],":例数",
+                      length(grep(n_1[i],
+                                  data_zd$中医主要诊断标准化系统分类)),"(",
+                      (length(grep(n_1[i],data_zd$中医主要诊断标准化系统分类))/
+                         nrow(data_zd)) %>%
+                        percent(.,0.01),
+                      ")",sep = "") %>% rep(.,length(tab)),
+                    "诊断名称" = names(tab),
+                    "全人群中发生例数" = NA,
+                    "在全人群占比" = NA,
+                    "AE人群中发生例数" = NA,
+                    "在AE人群占比" = NA,
+                    "ADR人群中发生例数" = NA,
+                    "在ADR人群占比" = NA)
+
+for (j in 1:nrow(tab_1)) {
+  tab_1$全人群中发生例数[j] <-
+    grep(tab_1[j,2],data_zd$中医主要诊断标准化) %>% length(.)
+
+  tab_1$在全人群占比[j] <-
+    ((tab_1[j,3])/nrow(data)) %>% percent(.,0.001)
+
+  tab_1$AE人群中发生例数[j] <-
+    grep(tab_1[j,2],data_zd_ae$中医主要诊断标准化) %>% length(.)
+
+  tab_1$在AE人群占比[j] <-
+    ((tab_1[j,5])/nrow(data_ae)) %>% percent(.,0.001)
+
+  tab_1$ADR人群中发生例数[j] <-
+    grep(tab_1[j,2],data_zd_adr$中医主要诊断标准化) %>% length(.)
+
+  tab_1$在ADR人群占比[j] <-
+    ((tab_1[j,7])/nrow(data_adr)) %>% percent(.,0.001)
+}
+
+#按ADR人群中的例数排序
+tab_1 <- tab_1[order(tab_1$ADR人群中发生例数,decreasing=TRUE),]
+
+return(tab_1)
+}
+
+
+######绘制系统分类及例次统计表格#######
+
+tabs_2 <- output1(tabs)  %>% 
+  merge_v(. , j = 1 , part = "body") %>%
+  theme_vanilla(.) %>% align(align = "center" , part = "all")
+
+```
+
+
+```{r}
+########中医主要诊断的Group组间比较#######
+
+data_zd$中医主要诊断标准化 <- gsub("\\.","\n",data_zd$中医主要诊断标准化)
+
+data_temp <- data_zd %>%
+  dplyr::select(., c("是否发生ADR" , "中医主要诊断标准化"))
+
+dtm_temp <- Adrae_dtm(data_temp)
+
+NAME <- dtm_temp$NAME5
+
+main_diags <- dtm_temp$dummy_vars#涉及的诊断数目
+
+Test <- Group1(dtm_temp$dtm, output = FALSE) %>% .[,c(1:5,ncol(.))]
+
+rm(data_temp, dtm_temp)
+
+#p值小于等于0.05的变量名
+Tsn <- Test[which(as.numeric(Test$`P值`) <= 0.05 | 
+                   Test$`P值` == "< 0.001"),1] %>%
+  paste(. , collapse = "、")
+
+```
+
+
+#### 6.1.1 ADR人群诊断类别统计
+
+<tr>**`r table_nums("tab6.1.1", caption = "ADR人群中医主要诊断系统分类统计表")`**</tr>
+
+```{r}
+casestab_adr_o
+```
+
+
+#### 6.1.2 诊断名例次统计
+
+<tr>**`r table_nums("tab6.1.2", caption = "中医主要诊断例次统计表")`**</tr>
+
+```{r}
+tabs_2
+```
+
+#### 6.1.3 组间比较
+
+```{r}
+
+des01 <- paste("发生ADR的患者，",Test[1,1],sep="")
+des02 <- paste("未发生ADR的患者，",Test[1,1],sep="")
+
+des1 <- paste(Test[2,1:2],collapse = "")%>%
+  paste(.,paste(Test[3,1:2],collapse = ""),sep = "、")
+des2 <- paste(Test[2,c(1,3)],collapse = "")%>%
+  paste(.,paste(Test[3,c(1,3)],collapse = ""),sep = "、")
+
+des <- paste(des01,des1,sep = ":")%>% #第一组描述
+  paste(.,paste(des02,des2,sep = ":"),sep = "，")%>% #第二组描述
+  paste(.,"两组的发生比例不/具有显著性差异",sep = "，")%>% #是否具有显著性差异
+  paste(.,paste("(p=",Test[1,6],")",sep = ""),"，")%>% #p值
+  gsub(" ","",.)
+
+rm(des01,des02,des1,des2)
+
+```
+
+&emsp;&emsp;全人群共涉及`r main_diags`种中医主要诊断名称。`r des`。其它主要诊断的比较检验过程保持一致。具有显著性差异的主要诊断有：`r Tsn`。比较检验结果详见`r gsub(": ","",table_nums("tab6.1.3"))`,且表中只保留发生ADR的中医主要诊断。
+
+<tr>**`r table_nums("tab6.1.3", caption = "中医主要诊断详表")`**</tr>
+
+```{r}
+output1(Test)
+
+rm(dtm,NAME,Test,Tsn,casenums,cases,casestab_adr,casestab_adr_o,des_sen)
+```
+
+#### 6.1.4 中医主要诊断中医证候
+
+```{r}
+########中医主要诊断中医证候的Group组间比较#######
+
+data_zd$中医主要诊断中医证候 <- gsub("，","\n",data_zd$中医主要诊断中医证候)
+
+data_temp <- data_zd %>% 
+  dplyr::select(., c("是否发生ADR" , "中医主要诊断中医证候"))
+
+dtm_temp <- Adrae_dtm(data_temp)
+
+NAME <- dtm_temp$NAME5
+
+main_diags <- dtm_temp$dummy_vars#涉及的诊断数目
+
+Test <- Group1(dtm_temp$dtm, output = FALSE) %>% .[,c(1:5,ncol(.))]
+
+rm(data_temp, dtm_temp)
+
+
+#p值小于等于0.05的变量名
+Tsn <- Test[which(as.numeric(Test$`P值`) <= 0.05 | 
+                   Test$`P值` == "< 0.001"),1] %>%
+  paste(. , collapse = "、")
+
+```
+
+&emsp;&emsp;全人群共涉及`r main_diags`种中医主要诊断中医证候，发生ADR与未发生ADR两组的诊断比例具有显著性差异的中医证候有：`r Tsn`。比较检验结果详见`r gsub(": ","",table_nums("tab6.1.4"))`,且表中只保留发生ADR的中医主要诊断中医证候。
+
+<tr>**`r table_nums("tab6.1.4", caption = "中医主要诊断中医证候详表")`**</tr>
+
+```{r}
+output1(Test)
+
+rm(dtm,NAME,Test,Tsn,casenums,cases,casestab_adr,casestab_adr_o,des_sen)
+```
+
+## 7.既往史
+
+```{r}
+
+data.jw <- read.xlsx("original xpt dataset/MH_病史（标准化）-2022年5月12日（既往病史）.xlsx",startRow = 2)
+
+names(data.jw)[seq(20,40,4)] <- 
+  paste(names(data.jw)[seq(20,40,4)],1:6,sep = "")
+#调整相同名称的列[既往不良反应的药物：PT（标准化）]
+
+
+#只使用目标人群的目标信息
+
+data.jw <- data.jw %>%
+  dplyr::select(.,
+                c(
+                  "受试者唯一编号",
+                  "家族史",
+                  "预防接种史",
+                  "传染病史",
+                  "过敏史",
+                  "手术/外伤史",
+                  "输血史",
+                  "既往不良反应史",
+                  names(data.jw)[seq(20, 40, 4)]
+                ))  %>%
+  filter(., 受试者唯一编号  %in% data$受试者唯一编号) %>%
+  merge(. , data_id_adr , by = "受试者唯一编号")
+
+```
+
+### 7.1 家族史、预防接种史、传染病史、过敏史、手术外伤史、输血史概述
+
+```{r}
+data.jw.temp <- data.jw %>% 
+  dplyr::select(.,c("是否发生ADR","家族史":"输血史"))
+
+for (j in 2:ncol(data.jw.temp)) {
+  data.jw.temp[,j] <- factor(data.jw.temp[,j], levels = c("有","无"))
+}
+
+
+Group1(data.jw.temp, output = FALSE) %>% .[,c(1:5,ncol(.))] %>%
+  output1(.)
+rm(data.jw.temp)
+```
+
+
+### 7.2 既往不良反应史
+
+```{r}
+data.jw.temp <- data.jw %>% 
+  dplyr::select(.,c("PT（标准化）1":"是否发生ADR"))
+
+data.jw.temp <- data.jw.temp %>% 
+  mutate(.,过敏物标准名 = NA)
+
+paste_dot <- function(x,y) {
+  return(paste(x,y, sep = "."))
+}
+
+data.jw.temp$过敏物标准名 <- 
+  foreach(i = 1:6, .combine = 'paste_dot') %do% {
+    data.jw.temp[,i]
+  }
+
+data.jw.temp$过敏物标准名  <-
+  gsub("\\.", "\n", data.jw.temp$过敏物标准名) %>%
+  gsub("\\;", "\n", .) %>%
+  gsub(",", "\n", .) %>%
+  gsub("，", "\n", .) %>%
+  gsub(" ", "", .) %>% 
+  gsub("\\(", "（", .) %>% 
+  gsub("\\)", "）", .)
+
+data_temp <- data.jw.temp %>% 
+  dplyr::select(., c("是否发生ADR" , "过敏物标准名"))
+
+dtm_temp <- Adrae_dtm(data_temp)
+
+NAME <- dtm_temp$NAME5
+
+drug_allergys <- dtm_temp$dummy_vars#涉及的过敏药物数目
+
+Test <- Group1(dtm_temp$dtm, output = FALSE) %>% .[,c(1:5,ncol(.))]
+
+rm(data_temp, dtm_temp)
+
+Tsn <- Test[which(as.numeric(Test$P值) <= 0.05 |
+                    Test$P值 == "< 0.001"),1] %>%
+  paste(. , collapse = "、")#p值小于等于0.05的变量名合并
+```
+
+&emsp;&emsp;在使用复方苦参注射液的`r nrow(data)`例患者中，具有显著性差异的既往不良反应史为：`r Tsn`。组间比较详见`r gsub(": ","",table_nums("tab7"))`,该表只保留发生ADR的既往不良反应史信息统计。
+
+<tr>**`r table_nums("tab7", caption = "既往不良反应史信息详表")`**</tr>
+
+```{r}
+output1(Test)
+
+rm(dtm, NAME, Test, Tsn, data.jw.temp)
+```
+
+## 8.间隔用药
+
+```{r}
+#导入标准化之后的"给药方案"数据进行统计
+
+data.re <-
+  read.xlsx("original xpt dataset/EX1_给药方案-2022年4月14日.xlsx",
+            startRow = 2)
+
+names(data.re)[20] <- "间隔液剂量标准化"
+
+data.re <- data.re %>%
+  filter(.,  受试者唯一编号  %in% data$受试者唯一编号) %>%
+  dplyr::select(
+    .,
+    c(
+      "受试者唯一编号",
+      "首次使用",
+      "给药剂量",
+      "溶媒种类",
+      "溶媒剂量":"使用苦参注射液的结束时间",
+      "间隔液名称标准化",
+      "间隔液剂量标准化",
+      "X22",
+      "X23"
+    )
+  ) %>% 
+  rename("间隔液剂量补充" = "X22", "间隔液标准名补充" = "X23")
+
+#最后两列对部分不合理的间隔液名称及剂量做了标准化处理，补充进来
+data.re$间隔液名称标准化 <- ifelse(is.na(data.re$间隔液标准名补充),
+                           data.re$间隔液名称标准化,
+                           data.re$间隔液标准名补充)
+
+data.re$间隔液剂量标准化 <- ifelse(is.na(data.re$间隔液剂量补充),
+                           data.re$间隔液剂量标准化,
+                           data.re$间隔液剂量补充)
+
+data.re <- data.re %>%
+  dplyr::select(.,-c("间隔液名称" , "间隔液剂量" ,
+                     "间隔液剂量补充", "间隔液标准名补充")) %>%
+  merge(., data_id_adr, by = "受试者唯一编号")
+
+```
+
+
+```{r}
+
+data_temp <- data.re %>% dplyr::select(., c("是否发生ADR", "间隔用药"))
+
+Test <- Group1(data_temp, output = FALSE) %>% .[,c(1:5,ncol(.))]
+
+rm(data_temp)
+
+des01 <- paste("发生ADR的患者，",Test[1,1],sep="")
+des02 <- paste("未发生ADR的患者，",Test[1,1],sep="")
+
+des1 <- paste(Test[2,1:2],collapse = "")%>%
+  paste(.,paste(Test[3,1:2],collapse = ""),sep = "、")
+des2 <- paste(Test[2,c(1,3)],collapse = "")%>%
+  paste(.,paste(Test[3,c(1,3)],collapse = ""),sep = "、")
+
+des <- paste(des01,des1,sep = ":")%>% #第一组描述
+  paste(.,paste(des02,des2,sep = ":"),sep = "，")%>% #第二组描述
+  paste(.,"两组的发生比例不/具有显著性差异",sep = "，")%>% #是否具有显著性差异
+  paste(.,paste("(p=",Test[1,6],")",sep = ""),sep = "，")%>% #p值
+  gsub(" ","",.)
+
+rm( des01, des02, des1, des2)
+
+```
+
+&emsp;&emsp;全人群中`r des`。本节之后的同类型分类变量描述统计保持格式一致。
+
+<tr>**`r table_nums("tab8", caption = "间隔用药信息详表")`**</tr>
+
+```{r}
+output1(Test)
+```
+
+
+### 8.1 是否间隔液期间进行冲管
+
+&emsp;&emsp;全人群中发生与未发生ADR两组患者的间隔液期间进行冲管比例具有显著性差异，详见见`r gsub(": ","",table_nums("tab8.1"))`。其中连续用药的`r sum(data.re$间隔用药 != "间隔用药")`例患者在表格中表现为数据缺失，具体表现为发生ADR患者人群中缺失`r table(data.re$是否发生ADR,data.re$间隔用药)[1,2]`例，未发生ADR患者人群中缺失`r table(data.re$是否发生ADR,data.re$间隔用药)[2,2]`例，本节中后续表格中的缺失值代表相同意义。
+
+```{r}
+data_interval <- data.re
+```
+
+<tr>**`r table_nums("tab8.1", caption = "是否间隔液期间进行冲管信息详表")`**</tr>
+```{r}
+data_temp <- data_interval %>%
+  dplyr::select(., c("是否发生ADR", "是间隔液期间进行冲管"))
+
+data_temp$是间隔液期间进行冲管  <- factor(data_temp$是间隔液期间进行冲管,
+                                levels = c("是", "否"))
+
+Group1(data_temp, output = FALSE) %>% .[,c(1:5,ncol(.))] %>% output1(.)
+
+rm(data_temp)
+```
+
+
+### 8.2 间隔时间
+
+```{r}
+
+
+#####数值格式标准化处理####
+
+data_interval$间隔时间   <-
+  ifelse(data_interval$间隔时间   %in% c("0", "00", "0000"),
+         "<5" ,
+         data_interval$间隔时间) %>%
+  ifelse(. %in% c("5", "05", "0005"),
+         "5" , .) %>%
+  ifelse(. %in% c("10", "0010"),
+         "10" , .) %>%
+  ifelse(. %in% c("15", "0015"),
+         "15" , .) %>%
+  factor(., levels = c("<5", "5", "10", "15", "20", "70"))
+```
+
+&emsp;&emsp;全人群中发生与未发生ADR两组患者的间隔时间比例不具有显著性差异，详见见`r gsub(": ","",table_nums("tab8.2"))`。
+
+<tr>**`r table_nums("tab8.2", caption = "间隔时间信息详表")`**</tr>
+
+```{r}
+data_temp <- data_interval %>%
+  dplyr::select(., c("是否发生ADR", "间隔时间"))
+
+Group1(data_temp, output = FALSE) %>% .[,c(1:5,ncol(.))] %>% output1(.)
+
+rm(data_temp)
+```
+
+### 8.3 间隔液
+
+```{r}
+data_interval$间隔液名称标准化  <-
+  tolower(data_interval$间隔液名称标准化) %>%
+  ifelse(grepl("注射用", .),
+         str_sub(., start = 4) %>% paste(., "注射液", sep = ""),
+         .) %>%
+  gsub("核糖核酸ⅱ", "核糖核酸", .)
+
+data_temp <- data_interval %>%
+  dplyr::select(., c("是否发生ADR", "间隔液名称标准化"))
+
+dtm_temp <- Adrae_dtm(data_temp)
+
+NAME <- dtm_temp$NAME5
+
+drug_jiange <- dtm_temp$dummy_vars#涉及的间隔液数量
+
+drug_jiange_1 <- ncol(dtm_temp$dtm)#ADR涉及的间隔液数量
+
+liquids <- names(dtm_temp$dtm)[-1]
+
+Test <- Group1(dtm_temp$dtm, output = FALSE) %>% .[,c(1:5,ncol(.))]
+
+# rm(data_temp, dtm_temp)#下段用到
+
+Tsn <- Test[which(as.numeric(Test$P值) <= 0.05 |
+                    Test$P值 == "< 0.001"),1] %>%
+  paste(. , collapse = "、")#p值小于等于0.05的变量名合并
+
+```
+
+&emsp;&emsp;全人群共涉及`r drug_jiange`种间隔液,ADR人群共涉及`r drug_jiange_1`种间隔液。其中所使用的间隔液对应的发生ADR比例从大到小前5位为`r NAME`，发生ADR与未发生ADR患者具有显著性差异的间隔液为`r Tsn`，详见`r gsub(": ","",table_nums("tab8.3"))`所示。
+
+<tr>**`r table_nums("tab8.3", caption = "间隔液信息详表")`**</tr>
+
+```{r}
+output1(Test)
+```
+
+<tr>**`横向占比统计`**</tr>
+
+```{r}
+Group(dtm_temp$dtm)
+
+rm(data_temp, dtm_temp)
+
+rm(NAME,Test,Tsn)
+```
+
+### 8.4 间隔液使用剂量例次
+
+```{r}
+data_interval$间隔液剂量标准化 <- 
+  tolower(data_interval$间隔液剂量标准化) %>%
+  ifelse(
+    grepl("g", .) & !grepl("mg", .),
+    str_sub(., end = -2) %>% as.numeric(.) %>%
+      multiply_by(., 1000) %>% paste(., "mg", sep = ""),
+    .
+  )
+```
+
+
+```{r}
+
+Des_liq <- foreach(i = 1:length(liquids), .combine = "rbind") %do% {
+  discribe <- data_interval %>%
+    filter(.,   间隔液名称标准化    == liquids[i]) %>%
+    dplyr::select(., c("是否发生ADR", "间隔液剂量标准化"))
+  
+  if (length(unique(discribe[, 1])) > 1) {
+    
+    #将剂量视为数值型
+    unit <- unique(str_sub(discribe[,2],start = -2))#单位
+    
+    names(discribe)[2] <- paste(liquids[2],"(",unit,")",sep = "")
+    
+    discribe[, 2] <- str_sub(discribe[, 2], end = -3) %>% as.numeric(.)
+    
+    discribe <- Group1(discribe, output = FALSE, test = FALSE) %>%
+      .[-nrow(.), ]
+    discribe[1, 2:4] <- names(discribe)[2:4]
+    
+    names(discribe) <- c("间隔液剂量","发生ADR", "未发生ADR", "总计")
+    
+    #将剂量视为因子型
+    # discribe[, 2] <- factor(discribe[, 2],
+    #                         levels =
+    #                           sort(table(discribe[, 2]),
+    #                                decreasing = TRUE) %>% names(.))
+    # #调整为按例数降序排列
+    # 
+    # discribe <- Group1(discribe, output = FALSE, test = FALSE) %>%
+    #   .[-nrow(.), ]
+    # discribe[1, 2:4] <- names(discribe)[2:4]
+    # 
+    # names(discribe) <- c("间隔液剂量", "发生ADR", "未发生ADR", "总计")
+    
+    
+    return(discribe)
+  }
+}
+
+```
+
+&emsp;&emsp;`r gsub(": ","",table_nums("tab8.4"))`展示非单组ADR的间隔液的剂量使用例次信息，其中不涉及ADR的间隔液未纳入统计。
+
+<tr>**`r table_nums("tab8.4", caption = "间隔液信息详表")`**</tr>
+
+```{r}
+output1(Des_liq)
+rm(Des_liq)
+```
+
+### 8.5 间隔用药次数
+
+```{r}
+
+#该表记录所有用药次数
+data7 <- read.xlsx('original xpt dataset/EX2_用药详表.xlsx',
+                   startRow = 2)
+
+data_temp <- data7 %>% count(., 受试者唯一编号) %>%
+  rename(.,  间隔用药次数  = n)
+
+data_interval <- data_interval %>% 
+  merge(.,data_temp, by = "受试者唯一编号")
+
+data_interval$间隔用药次数[data_interval$间隔用药 != "间隔用药"] <- NA
+
+rm(data_temp, data7)
+```
+
+&emsp;&emsp;发生ADR与未发生ADR人群的间隔用药次数具有显著性差异，详见`r gsub(": ","",table_nums("tab8.5"))`。
+
+<tr>**`r table_nums("tab8.5", caption = "间隔用药次数信息详表")`**</tr>
+
+```{r}
+data_temp <- data_interval %>%
+  dplyr::select(., c("是否发生ADR", "间隔用药次数"))
+
+Group1(data_temp, output = FALSE) %>%
+  .[, c(1:5, ncol(.))] %>% output1(.)
+
+rm(data_temp)
+```
+
+
+## 9.复方苦参注射液用药详情
+
+### 9.1 是否首次用药
+
+```{r}
+data.re$首次使用  <- factor(data.re$首次使用, levels = c("是", "否"))
+
+data_temp <- data.re %>% dplyr::select(., c("是否发生ADR", "首次使用"))
+
+Test <- Group1(data_temp , output = FALSE)%>% .[,c(1:5,ncol(.))]
+
+rm(data_temp)
+
+des01 <- paste("发生ADR的患者，",Test[1,1],sep="")
+des02 <- paste("未发生ADR的患者，",Test[1,1],sep="")
+
+des1 <- paste(Test[2,1:2],collapse = "")%>%
+  paste(.,paste(Test[3,1:2],collapse = ""),sep = "、")
+des2 <- paste(Test[2,c(1,3)],collapse = "")%>%
+  paste(.,paste(Test[3,c(1,3)],collapse = ""),sep = "、")
+
+des <- paste(des01,des1,sep = ":")%>% #第一组描述
+  paste(.,paste(des02,des2,sep = ":"),sep = "，")%>% #第二组描述
+  paste(.,"两组的发生比例不/具有显著性差异",sep = "，")%>% #是否具有显著性差异
+  paste(.,paste("(p=",Test[1,6],")",sep = ""),"，")%>% #p值
+  gsub(" ","",.)
+
+rm(des01,des02,des1,des2)
+```
+
+&emsp;&emsp;`r des`详见`r gsub(": ","",table_nums("tab9.1"))`。
+
+<tr>**`r table_nums("tab9.1", caption = "是否首次用药信息详表")`**</tr>
+```{r}
+output1(Test)
+rm(Test)
+```
+
+### 9.2 每日给药剂量
+
+```{r}
+data.re$给药剂量 <- as.numeric(data.re$给药剂量)
+
+data_temp <- data.re %>% 
+  dplyr::select(.,c("是否发生ADR", "给药剂量")) %>%
+  rename(.,"每日给药剂量(ml)" = "给药剂量")
+
+Test <- Group1(data_temp, output = FALSE) %>%
+  .[, c(1:5, ncol(.))]
+
+# rm(data_temp)#后面还将用到
+
+des01 <- paste("发生ADR的患者，",Test[1,1],sep="")
+des02 <- paste("未发生ADR的患者，",Test[1,1],sep="")
+
+des1 <- paste("均数(标准差)为",Test[2,2],sep="")%>%
+  paste(.,paste("中位数(上下四分位数)为",Test[3,2],sep=""),sep = ",")
+des2 <- paste("均数(标准差)为",Test[2,3],sep="")%>%
+  paste(.,paste("中位数(上下四分位数)为",Test[3,3],sep=""),sep = ",")
+
+des <- paste(des01,des1,sep = ":")%>% #第一组描述
+  paste(.,paste(des02,des2,sep = ":"),sep = "，")%>% #第二组描述
+  paste(.,"两组的分布不/具有显著性差异",sep = "，")%>% #是否具有显著性差异
+  paste(.,paste("(p=",Test[1,6],")",sep = ""),"，")%>%
+  gsub(" ","",.)
+
+rm(des01,des02,des1,des2)
+
+```
+
+&emsp;&emsp;`r des`。详见`r gsub(": ","",table_nums("tab9.2"))`所示。
+
+<tr>**`r table_nums("tab9.2", caption = "每日给药剂量信息详表")`**</tr>
+
+```{r}
+output1(Test)
+```
+
+&emsp;&emsp;各用药剂量描述
+
+```{r}
+data_temp$`每日给药剂量(ml)` <- as.character(data_temp$`每日给药剂量(ml)`)
+
+Group1(data_temp, output = FALSE) %>%
+  .[, c(1:5, ncol(.))] %>% output1(.)
+
+rm(data_temp)
+```
+
+
+### 9.3 平均用药量
+
+```{r}
+
+data_temp <- data %>%
+  dplyr::select(., c("是否发生ADR", "单次用药量", "受试者唯一编号")) %>%
+  mutate(., 平均用药量  = NA)
+
+data_temp <- data_temp %>% group_by(受试者唯一编号) %>%
+  summarise(
+    是否发生ADR = first(是否发生ADR),
+    平均用药量   = strsplit(单次用药量 , ",")[[1]] %>%
+      as.numeric(.) %>% mean(.)
+  ) %>% .[,-1] %>% as.data.frame(.)
+
+```
+
+&emsp;&emsp;发生ADR与未发生ADR的平均用药量无显著性差异。详见`r gsub(": ","",table_nums("tab9.3"))`所示。
+
+<tr>**`r table_nums("tab9.3", caption = "用药详情：平均用药量信息详表")`**</tr>
+
+```{r}
+Group1(data_temp, output = FALSE) %>%  .[, c(1:5, ncol(.))] %>% output1(.)
+
+rm(data_temp)
+```
+
+
+### 9.4 溶媒种类
+
+&emsp;&emsp;发生ADR与未发生ADR的各溶媒发生使用比例无显著性差异。详见`r gsub(": ","",table_nums("tab9.4"))`所示。
+
+<tr>**`r table_nums("tab10_4", caption = "溶媒种类信息详表")`**</tr>
+
+```{r}
+
+data_temp <- data.re %>% dplyr::select(., c("是否发生ADR", "溶媒种类"))
+
+data_temp$溶媒种类   <- factor(data_temp$溶媒种类 , levels =
+                             sort(table(data_temp$溶媒种类),
+                                  decreasing = TRUE) %>% names(.))
+
+Group1(data_temp, output = FALSE) %>%  .[, c(1:5, ncol(.))] %>% output1(.)
+```
+
+
+### 9.5 溶媒剂量
+
+```{r}
+data_temp <-
+  data.re %>% dplyr::select(., c("是否发生ADR", "溶媒种类", "溶媒剂量"))
+
+
+Des_rm <- foreach(i = c("0.9%生理盐水", "5%葡萄糖"),
+                  .combine = "rbind") %do% {
+                    data_temp_rm <- data_temp %>%
+                      filter(.,   溶媒种类   == i) %>%
+                      dplyr::select(., c("是否发生ADR", "溶媒剂量"))
+                    
+                    describe <-
+                      Group1(data_temp_rm, output = FALSE,
+                             test = FALSE) %>%
+                      .[, c(1:4)]
+                    
+                    describe[1, 1] <- i
+                    describe[1, 2:4] <- names(describe)[2:4]
+                    
+                    names(describe)[1:4] <-
+                      c("溶媒剂量(ml)", "发生ADR", "未发生ADR", "总计")
+                    
+                    return(describe)
+                  }
+
+###
+
+```
+
+&emsp;&emsp;在使用复方苦参注射液的`r nrow(data)`例患者中，ADR发生比例对溶媒剂量的统计结果详见`r gsub(": ","",table_nums("tab9.5"))`。
+
+<tr>**`r table_nums("tab9.5", caption = "溶媒剂量信息详表")`**</tr>
+
+```{r}
+output1(Des_rm)
+
+rm(data_temp, Des_rm)
+```
+
+### 9.6 药物浓度
+
+&emsp;&emsp;在使用复方苦参注射液的`r nrow(data)`例患者中，所用溶媒为0.9%生理盐水、5%葡萄糖、10%葡萄糖，其中使用10%葡萄糖溶媒的人群中无发生ADR患者。统计结果详见`r gsub(": ","",table_nums("tab9.6"))`。
+
+<tr>**`r table_nums("tab9.6", caption = "药物浓度信息详表")`**</tr>
+```{r}
+#分生理盐水、5%葡萄糖溶液溶媒分别计算浓度、
+
+#data$每日给药剂量(ml)/(data$每日给药剂量(ml)+data$溶媒剂量)
+
+data_temp <- data.re %>%
+  dplyr::select(., c("是否发生ADR", "给药剂量", 
+                     "溶媒剂量", "溶媒种类")) %>% 
+  mutate(.,"浓度" = NA)
+
+data_temp[,2:3] <- apply(data_temp[,2:3], 2, as.numeric)
+
+data_temp$浓度 <- (data_temp$给药剂量/
+                   (data_temp$给药剂量+data_temp$溶媒剂量))
+
+Des_nd <- foreach(i = c("0.9%生理盐水", "5%葡萄糖"),
+                  .combine = "rbind") %do%
+  {
+    data_temp_rm <- data_temp %>%
+      filter(.,  溶媒种类   == i) %>%
+      dplyr::select(., c("是否发生ADR", "浓度"))
+    
+    Des_i <-
+      Group1(data_temp_rm, output = FALSE) %>%
+      .[1:5, 1:4]
+    
+    Des_i[1, 1] <-
+      paste("药物浓度（ml/ml|溶媒：", i, ")", sep = "")
+    Des_i[1, 2:4] <- names(Des_i)[2:4]
+    names(Des_i) <- c("变量", "发生ADR",
+                      "未发生ADR", "总计")
+    
+    return(Des_i)
+    
+  }
+
+
+output1(Des_nd)
+rm(data_temp, Des_nd)
+```
+
+
+### 9.7 滴注时间
+
+&emsp;&emsp;发生ADR与未发生ADR人群的滴注时间占比不具有显著性差异，详见`r gsub(": ","",table_nums("tab9.7"))`。
+
+<tr>**`r table_nums("tab9.7", caption = "滴注时间信息详表")`**</tr>
+
+```{r}
+data.re$滴注时间 <- factor(data.re$滴注时间,
+                       levels = c("30min","45min","60min","90min",
+                                  "120min","120min 以上"))
+
+data_temp <- data.re %>% dplyr::select(.,c("是否发生ADR", "滴注时间"))
+
+Group1(data_temp, output = FALSE) %>% .[,c(1:5,ncol(.))] %>% output1(.)
+
+rm(data_temp)
+
+```
+
+
+### 9.8 平均静滴速度
+
+&emsp;&emsp;全人群中，发生ADR与未发生ADR人群静滴速度使用比例具有显著性差异的是：31-45滴/min、46～60滴/min、61-90滴/min。组间比较详见`r gsub(": ","",table_nums("tab9.8"))`。
+
+<tr>**`r table_nums("tab9.8", caption = "用药详情：平均静滴速度信息详表")`**</tr>
+
+```{r}
+data$`静滴速度` <- gsub("," , "\n" , data$`静滴速度`)
+
+data_temp <- data %>% dplyr::select(.,c("是否发生ADR", "静滴速度"))
+
+dtm_temp <- Adrae_dtm(data_temp)
+
+Group1(dtm_temp$dtm, output = FALSE) %>% .[,c(1:5,ncol(.))] %>%
+  output1(.)
+
+rm(data_temp, dtm_temp)
+```
+
+### 9.9 配药至给药间隔时间
+
+&emsp;&emsp;发生ADR与未发生ADR人群的配药至给药间隔时间的使用比例不具有显著性差异，组间比较详见`r gsub(": ","",table_nums("tab9.9"))`。
+
+
+<tr>**`r table_nums("tab9.9", caption = "配药至给药间隔时间信息详表")`**</tr>
+
+```{r}
+
+data$`配药至给药间隔时间` <- gsub("," , "\n" , data$`配药至给药间隔时间`)
+
+data_temp <- data %>% 
+  dplyr::select(.,c("是否发生ADR", "配药至给药间隔时间"))
+
+dtm_temp <- Adrae_dtm(data_temp)
+
+names(dtm_temp$dtm)[-1] <- paste(names(dtm_temp$dtm[,-1]) ,
+                                 "(min)" , sep = "")
+
+Group1(dtm_temp$dtm, output = FALSE) %>% .[, c(1:5, ncol(.))] %>%
+  output1(.)
+
+rm(data_temp, dtm_temp)
+
+```
+
+### 9.10 药物滴注开始到不良反应发生时间
+
+&emsp;&emsp;70例患者发生不良事件84例次，药物滴注开始到不良事件发生时间的统计结果详见详见`r gsub(": ","",table_nums("tab9.10"))`。
+
+
+<tr>**`r table_nums("tab9.10", caption = "药物滴注开始到不良反应发生时间信息详表")`**</tr>
+
+```{r}
+data_temp <- data_o_ae %>% dplyr::select(.,c(
+  "受试者唯一编号",
+  "药物滴注开始到不良事件发生时间（秒-分-时-天）",
+  "是否发生ADR"
+)) %>% filter(., 是否发生ADR == "发生ADR")
+
+
+data_temp_time <- data_temp[,1:2] %>%
+  separate(., "药物滴注开始到不良事件发生时间（秒-分-时-天）", 
+                      into = c("秒", "分", "时", "天"),
+                      sep = "-")
+
+data_temp_time[, -1] <- lapply(data_temp_time[, -1], as.numeric)
+
+data_temp_time$`药物滴注开始到不良反应发生时间` <- NA
+
+#在开始此段判断之前，先将时分秒规范到[0,24)区间内，以便实现判断
+
+
+data_temp_time$`药物滴注开始到不良反应发生时间` <- 
+ifelse(data_temp_time$时 >24|
+         data_temp_time$天 >= 1,
+       ">1d" , NA) %>%
+ifelse(data_temp_time$时 > 5 & 
+         data_temp_time$时 <= 24 & 
+         data_temp_time$天 < 1, 
+       "(5h,24h]", .) %>%
+ifelse(data_temp_time$时 >= 1 & 
+         data_temp_time$时 <= 5 & 
+         data_temp_time$天 < 1,
+       "(1h,5h]", .) %>%
+ifelse(data_temp_time$天 < 1 &
+         data_temp_time$时 <1 & 
+         data_temp_time$分 > 30 &
+         data_temp_time$分 <= 60,
+       "(0.5h,1h]",.) %>%
+ifelse(data_temp_time$天 < 1 &
+         data_temp_time$时 < 1 &
+         data_temp_time$分 > 5 &
+         data_temp_time$分 <= 30,
+       "(5min,30min]",.) %>%
+ifelse(data_temp_time$天 < 1 & 
+         data_temp_time$时 < 1 &
+         data_temp_time$分 <= 5 ,
+       "(0,5min]",.)
+
+
+data_temp_time$`药物滴注开始到不良反应发生时间` <-
+  factor(
+    data_temp_time$`药物滴注开始到不良反应发生时间`,
+    levels = c(
+      "(0,5min]",
+      "(5min,30min]",
+      "(0.5h,1h]",
+      "(1h,5h]",
+      "(5h,24h]",
+      ">1d"
+    )
+  )
+
+tab.fres <- data.frame(
+  data_temp_time$`药物滴注开始到不良反应发生时间` %>%
+    table(.)
+) %>%
+  rename(.,"药物滴注开始到不良反应发生时间" = ".",
+         "频数" = "Freq") %>%
+  mutate(., "百分比" = percent(频数/sum(频数)))
+
+output1(tab.fres)
+
+rm(data_temp, data_temp_time, tab.fres)
+```
+
+### 9.11 用药天数
+
+&emsp;&emsp;发生ADR与未发生ADR人群的用药天数不具有显著性差异，详见`r gsub(": ","",table_nums("tab9.11"))`。
+
+<tr>**`r table_nums("tab9.11", caption = "用药天数信息详表")`**</tr>
+
+```{r}
+#data.re第17-18列计算
+
+data_temp <-
+  data.re %>% dplyr::select(., c("是否发生ADR", 
+                                 "使用苦参注射液开始时间",  
+                                 "使用苦参注射液的结束时间")) 
+
+data_temp[,2:3] <- apply(data_temp[,2:3] , 2, as.Date) %>%
+  apply(., 2, as.numeric)
+
+data_temp <- data_temp %>%
+  mutate(., 用药天数  =
+           使用苦参注射液的结束时间 - 使用苦参注射液开始时间)
+
+data_temp <- data_temp %>% dplyr::select(.,c("是否发生ADR","用药天数"))
+
+Group1(data_temp, output = FALSE) %>% .[, c(1:5, ncol(.))] %>% output1(.)
+
+rm(data_temp)
+```
+
+
+## 10.合并用药详情
+
+```{r}
+
+#重新导入合并用药数据集
+data_db <-
+  read.xlsx("original xpt dataset/4.CM_合并用药(编码)-2022年5月18日.xlsx",
+            startRow = 2)
+
+data_db <- data_db %>% dplyr::select(.,c("受试者唯一编号",
+                                         "类别","剂量",
+                                         "drgname（商品名/通用名）",
+                                         "X18","X19")) %>%
+  rename(.,"商品名" = "drgname（商品名/通用名）",
+         "二级分类" = "X18",
+         "一级分类" = "X19"
+         )
+
+```
+
+```{r}
+##############
+#不再保留通用名称，现在data_db的最后两列分别对应一级和二级分类，在西药和中药之下统计一级分类，归属于二级分类即可。组间比较也对二级分类进行
+```
+
+
+```{r}
+data_db_temp <- data_db %>%
+  group_by(受试者唯一编号) %>%
+  summarise(
+    类别   = paste(类别, collapse = ","),
+    剂量   = paste(剂量, collapse = ","),
+    二级分类   = paste(二级分类, collapse = ","),
+    一级分类   = paste(一级分类, collapse = ",")
+  ) %>%
+  merge(data_id_adrae, ., by = "受试者唯一编号", all.x = TRUE)
+###
+
+data_db_adr <- data_db_temp %>% filter(., 是否发生ADR == "发生ADR")
+data_db_ae <- data_db_temp %>% filter(., 是否为不良事件  == "AE")
+
+
+##后续按间隔液的形式给出剂量统计描述表格
+##但是单位的不标准程度太高，暂不处理
+
+# 开端说明合并用药人群多少例数
+
+db_nadr <- match(data_db_adr$受试者唯一编号,data_db$受试者唯一编号) %>%
+  na.omit(.) %>% length(.)
+
+db_nae <- match(data_db_ae$受试者唯一编号,data_db$受试者唯一编号) %>%
+  na.omit(.) %>% length(.)
+
+
+
+#1.按药物类别给出描述
+
+#2.描述系统分类下的ADR发生情况
+
+#3.按下文soc_pt形式给出各药理分类下的药名及其人群占比
+
+#4.按药名给出一个总的group表格，给出p值小于0.05的药物名称
+```
+
+&emsp;&emsp;全人群`r nrow(data)`例患者中，有合并用药的患者共`r nrow(data_db)`例，占比`r percent(nrow(data_db)/nrow(data),0.01)`;AE人群`r nrow(data_ae)`例患者中，有合并用药的患者共`r db_nae`例，占比`r percent(db_nae/nrow(data_ae),0.01)`;ADR人群`r nrow(data_adr)`例患者中，有合并用药的患者共`r db_nadr`例，占比`r percent(db_nadr/nrow(data_adr),0.01)`。
+
+### 10.1 合并用药类别
+
+```{r}
+
+data_db_temp$类别 <- gsub(",", "\n", data_db_temp$类别) %>%
+  gsub("中成药","中药",.)
+
+data_temp <- data_db_temp %>% dplyr::select(.,c("是否发生ADR","类别"))
+
+dtm_temp <- Adrae_dtm(data_temp)
+
+
+Test <- Group1(dtm_temp$dtm, output = FALSE) %>% .[,c(1:5,ncol(.))]
+
+
+des01 <- paste("发生ADR的患者，",Test[1,1],sep="")
+des02 <- paste("未发生ADR的患者，",Test[1,1],sep="")
+
+des1 <- paste(Test[2,1:2],collapse = "")%>%
+  paste(.,paste(Test[3,1:2],collapse = ""),sep = "、")
+des2 <- paste(Test[2,c(1,3)],collapse = "")%>%
+  paste(.,paste(Test[3,c(1,3)],collapse = ""),sep = "、")
+
+des <- paste(des01,des1,sep = ":")%>% #第一组描述
+  paste(.,paste(des02,des2,sep = ":"),sep = "，")%>% #第二组描述
+  paste(.,"两组的发生比例不/具有显著性差异",sep = "，")%>% #是否具有显著性差异
+  paste(.,paste("(p=",Test[1,6],")",sep = ""),sep = "，")%>% #p值
+  gsub(" ","",.)
+
+rm(des01,des02,des1,des2)
+```
+
+&emsp;&emsp;全人群中，`r des`。发生ADR与未发生ADR患者的合并用药中，中药的使用比例具有显著性差异。详见`r gsub(": ","",table_nums("tab10.1"))`。
+
+
+<tr>**`r table_nums("tab10.1", caption = "合并用药类别信息详表")`**</tr>
+
+```{r}
+output1(Test)
+rm(data_temp, dtm_temp, Test)
+```
+
+### 10.2 药物系统分类
+
+```{r}
+
+data_db_temp$一级分类 <- gsub(",", "\n", data_db_temp$一级分类)
+
+data_temp <- data_db_temp %>%
+  dplyr::select(., c("是否发生ADR", "一级分类"))
+
+dtm_temp <- Adrae_dtm(data_temp)
+
+
+Test <- Group1(dtm_temp$dtm, output = FALSE) %>% .[,c(1:5,ncol(.))]
+
+
+Tsn <- Test[which(as.numeric(Test$P值) <= 0.05 |
+                    Test$P值  == "< 0.001"), 1] %>%
+  paste(., collapse = "、")
+
+```
+
+&emsp;&emsp;发生ADR与未发生ADR患者合并用药一级分类的使用比例具有显著性差异的为：`r Tsn`，详见`r gsub(": ","",table_nums("tab10.2"))`，表格中合并用药一级分类按发生ADR人群中的使用人数占比降序排列。
+
+<tr>**`r table_nums("tab10.2", caption = "合并用药一级分类信息详表")`**</tr>
+
+```{r}
+output1(Test)
+rm(data_temp, dtm_temp, Test, Tsn)
+```
+
+
+### 10.3 合并用药一级与二级分类例数与例次统计
+
+```{r}
+
+data_temp <- data_db_adr %>%
+  dplyr::select(., c("受试者唯一编号", "一级分类"))
+
+d_1 <- separate(data_temp , "一级分类" ,
+                into = c(paste("w", 1:100, sep = "")) ,
+                sep = ",")
+rm(data_temp)
+
+data_temp <- data_db_adr %>%
+  dplyr::select(., c("受试者唯一编号", "二级分类"))
+
+d_2 <- separate(data_temp , "二级分类" ,
+                into = c(paste("v", 1:100, sep = "")) ,
+                sep = ",")#将所有药物二级分类名称按逗号分割
+rm(data_temp)
+
+
+
+d_4 <- foreach(i = 2:ncol(d_1), .combine = "rbind") %do% 
+  {
+    cbind(d_1[, i], d_2[, i])
+  } %>% as.data.frame(.) %>%
+  rename(一级分类 = V1,
+            二级分类 = V2) %>% na.omit(.)
+
+
+n_1 <- filter(d_4, 一级分类 != "UK") %>%
+  dplyr::select(.,一级分类)%>%
+  table(.) %>%
+  sort(., decreasing = TRUE) %>%
+  names(.)
+
+
+tabs <- foreach(i = 1:length(n_1), 
+                .packages = c("dplyr","magrittr","scales"),
+                .combine = "rbind") %do%
+  {
+d_5 <- d_4 %>% filter(.,一级分类 == n_1[i] )
+
+tab <- table(d_5$二级分类) %>% sort(.,decreasing = TRUE)
+
+tab_1 <- data.frame("一级分类名称" = paste(n_1[i],":例数",
+                      length(grep(n_1[i],
+                                  data_db_temp$一级分类)),"(",
+                      (length(grep(n_1[i],data_db_temp$一级分类))/
+                         nrow(data_db_temp)) %>%
+                        percent(.,0.01),
+                      ")",sep = "") %>% rep(.,length(tab)),
+                    "二级分类名称" = names(tab),
+                    "全人群中使用例数" = NA,
+                    "在全人群占比" = NA,
+                    "AE人群中使用例数" = NA,
+                    "在AE人群占比" = NA,
+                    "ADR人群中使用例数" = NA,
+                    "在ADR人群占比" = NA)
+
+for (j in 1:nrow(tab_1)) {
+  tab_1$全人群中使用例数[j] <-
+    grep(tab_1[j,2],data_db_temp$二级分类) %>% length(.)
+
+  tab_1$在全人群占比[j] <-
+    ((tab_1[j,3])/nrow(data_db_temp)) %>% percent(.,0.001)
+
+  tab_1$AE人群中使用例数[j] <-
+    grep(tab_1[j,2],data_db_ae$二级分类) %>% length(.)
+
+  tab_1$在AE人群占比[j] <-
+    ((tab_1[j,5])/nrow(data_db_ae)) %>% percent(.,0.001)
+
+  tab_1$ADR人群中使用例数[j] <-
+    grep(tab_1[j,2],data_db_adr$二级分类) %>% length(.)
+
+  tab_1$在ADR人群占比[j] <-
+    ((tab_1[j,7])/nrow(data_db_adr)) %>% percent(.,0.001)
+}
+
+#按ADR人群中的例数排序
+tab_1 <- tab_1[order(tab_1$ADR人群中使用例数,decreasing=TRUE),]
+
+return(tab_1)
+}
+
+tabs_2 <- output1(tabs)  %>% 
+  merge_v(. , j = 1 , part = "body") %>%
+  theme_vanilla(.) %>% align(align = "center" , part = "all")
+```
+
+<tr>**`r table_nums("tab10.3", caption = "合并用药一级、二级分类例数与例次信息详表")`**</tr>
+```{r}
+tabs_2
+
+rm(tabs, tabs_2)
+```
+
+
+### 10.4 发生与未发生ADR组间合并用药的二级分类统计检验
+
+```{r}
+
+data_db_temp$二级分类 <- gsub(",", "\n", data_db_temp$二级分类)
+
+data_temp <- data_db_temp %>%
+  dplyr::select(., c("是否发生ADR", "二级分类"))
+
+dtm_temp <- Adrae_dtm(data_temp)
+
+
+Test <- Group1(dtm_temp$dtm, output = FALSE) %>% .[,c(1:5,ncol(.))]
+
+
+Tsn <- Test[which(as.numeric(Test$P值) <= 0.05 |
+                    Test$P值  == "< 0.001"), 1] %>%
+  paste(., collapse = "、")
+
+
+```
+
+&emsp;&emsp;发生ADR与未发生ADR患者所涉及合并用药二级分类的使用比例具有显著性差异的药物名称为：`r Tsn`，详见`r gsub(": ","",table_nums("tab10.4"))`
+<tr>**`r table_nums("tab10.4", caption = "合并用药二级分类信息详表")`**</tr>
+
+表格按发生ADR人群的合并用药二级分类使用占比降序排列。
+
+```{r}
+output1(Test)
+
+rm(data_temp,dtm_temp,Test,Tsn)
+```
+
+
+## 11.ADR系统分类
+
+
+#### 严重不良反应描述
+
+```{r}
+
+data_o_adr %>%
+  filter(.,报表级别 == "严重") %>%
+  dplyr::select(.,
+                c("受试者唯一编号":"不良事件终止时间",
+                  "结局", "对原疾病的影响" ,
+                  "soc_name", "pt_name")) %>% output1(.)
+
+
+```
+
+### SOC分类统计
+
+```{r}
+data_temp <- data_o_ae %>%
+  dplyr::select(., c("受试者唯一编号", "pt_name", "soc_name")) %>%
+  merge(data_id_adrae, ., by = "受试者唯一编号", all.x = TRUE)
+
+```
+
+
+#### ADR人群各soc系统下例次统计
+
+```{r}
+#####使用creatdtm统计不良反应的例次及例数####
+
+data_temp <- data_o_ae_adr %>%
+  group_by(受试者唯一编号) %>% 
+  dplyr::summarise(soc_name = paste(soc_name, collapse = ","),
+                   pt_name = paste(pt_name, collapse = ","))
+
+#直接对初始DTM矩阵colsums将得到每个名称的例次
+#DTM进行01处理后再colsums将得到每个名称的例数
+
+data_temp$soc_name <- gsub(",","\n",data_temp$soc_name)
+
+  dtm <-
+  as.data.frame(as.matrix(
+    createDTM(
+      data_temp$soc_name,
+      language = "zh",
+      tokenize = NULL,
+      removePunctuation = FALSE,
+      removeNumbers = FALSE,
+      removeStopwords = FALSE
+    )
+  ))
+
+  cases <- colSums(dtm) %>% sort(., decreasing = TRUE)#例次
+  
+  dtm <- ifelse(dtm[, ] == 0, 0, 1)
+  
+  cases_1 <- colSums(dtm) %>% sort(., decreasing = TRUE)#例数
+  
+  
+tab.temp <- data.frame(
+  "soc_name" = names(cases),
+  "例次" = as.numeric(cases),
+  "例次占比" = NA,
+  "例数" = as.numeric(cases_1),
+  "例数占比" = NA
+)
+
+tab.temp$例次占比 <- (tab.temp$例次/nrow(data_o_ae_adr)) %>%
+  percent(.,0.01)
+
+tab.temp$例数占比 <- (tab.temp$例数/nrow(data_adr)) %>% 
+  percent(.,0.01)
+
+tab.temp <- flextable(tab.temp) %>% 
+  align(align = "center" , part = "all")#_output
+```
+
+<tr>**`r table_nums("tab11_2.1", caption = "ADR人群SOC系统名称统计详表")`**</tr>
+
+```{r}
+tab.temp
+```
+
+*注：例次占比=(soc_name/216)×100%,例数占比=(soc系统例数/193)×100%。*
+
+```{r}
+rm(data_temp,dtm,cases,cases_1,tab.temp)
+```
+
+
+#### soc_name--pt_name统计详表
+
+```{r}
+d_4 <- data_o_ae_adr %>% dplyr::select(., c("soc_name", "pt_name"))
+
+n_1 <- table(data_o_ae_adr$soc_name) %>%
+  sort(., decreasing = TRUE) %>%
+  names(.)
+```
+
+```{r}
+
+tabs <- foreach(i = 1:length(n_1), 
+                .packages = c("dplyr","magrittr","scales"),
+                .combine = "rbind") %do%
+  {
+d_5 <- d_4 %>% filter(.,soc_name == n_1[i] )
+
+tab <- table(d_5$pt_name) %>% sort(.,decreasing = TRUE)
+
+tab_1 <- data.frame("soc系统分类" = paste(n_1[i],":例数",
+                      length(grep(n_1[i],
+                                  data_o_ae$soc_name)),"(",
+                      (length(grep(n_1[i],data_o_ae$soc_name))/
+                         nrow(data_o_ae)) %>%
+                        percent(.,0.01),
+                      ")",sep = "") %>% rep(.,length(tab)),
+                    "pt诊断名称" = names(tab),
+                    "AE人群中发生例数" = NA,
+                    "在AE人群占比" = NA,
+                    "ADR人群中发生例数" = NA,
+                    "在ADR人群占比" = NA)
+
+for (j in 1:nrow(tab_1)) {
+
+  tab_1$AE人群中发生例数[j] <-
+    grep(tab_1[j,2],data_o_ae$pt_name) %>% length(.)
+
+  tab_1$在AE人群占比[j] <-
+    ((tab_1[j,3])/nrow(data_o_ae)) %>% percent(.,0.001)
+
+  tab_1$ADR人群中发生例数[j] <-
+    grep(tab_1[j,2],data_o_ae_adr$pt_name) %>% length(.)
+
+  tab_1$在ADR人群占比[j] <-
+    ((tab_1[j,5])/nrow(data_o_ae_adr)) %>% percent(.,0.001)
+}
+
+#按ADR人群中的例数排序
+tab_1 <- tab_1[order(tab_1$ADR人群中发生例数,decreasing=TRUE),]
+
+return(tab_1)
+}
+
+tabs_2 <- output1(tabs)  %>% 
+  merge_v(. , j = 1 , part = "body") %>%
+  theme_vanilla(.) %>% align(align = "center" , part = "all")
+```
+
+
+<tr>**`r table_nums("tab11_2.2", caption = "SOC-PT系统名称统计详表")`**</tr>
+
+```{r}
+tabs_2
+```
+
+
+## 12.ADR转归/对原疾病的影响/不良事件与使用复方苦参注射液关联性评估
+
+&emsp;&emsp;下表统计`r nrow(data_o_ae_adr)`例次不良反应的
+
+<tr>**`r table_nums("tab12", caption = "ADR转归/对原疾病的影响/不良事件与使用复方苦参注射液关联性评")`**</tr>
+
+```{r}
+data_temp <- data_o_adr %>%
+  dplyr::select(., c("结局", "对原疾病的影响",
+                     "不良事件与使用复方苦参注射液关联性评估")) %>%
+  rename(., "AE转归" = "结局")
+
+data_temp$不良事件与使用复方苦参注射液关联性评估  <-
+  gsub("待评价", "无法评价",
+       data_temp$不良事件与使用复方苦参注射液关联性评估) %>%
+  factor(., levels = c("很可能有关", "可能有关", "可能无关", "无法评价"))
+
+Describe(data_temp)
+```
+
+
